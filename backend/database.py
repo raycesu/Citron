@@ -1,3 +1,4 @@
+import logging
 import os
 from contextlib import contextmanager
 
@@ -7,14 +8,25 @@ from sqlalchemy.orm import Session, sessionmaker
 
 load_dotenv()
 
+_logger = logging.getLogger(__name__)
+
 
 def _resolve_database_url() -> str:
     configured_url = os.getenv("DATABASE_URL")
     if configured_url:
         return configured_url
 
-    # Vercel file system is read-only except /tmp
     if os.getenv("VERCEL"):
+        # Vercel's filesystem is read-only except /tmp, which is ephemeral and
+        # not shared across instances.  Data will be lost on every cold start.
+        # Set DATABASE_URL to a persistent provider (e.g. Neon, PlanetScale,
+        # Supabase) in your Vercel project environment variables to avoid this.
+        _logger.warning(
+            "DATABASE_URL is not set on Vercel. Falling back to ephemeral "
+            "SQLite at /tmp/citron.db — data will not persist across "
+            "deployments or cold starts. Set DATABASE_URL in your Vercel "
+            "project environment variables."
+        )
         return "sqlite:////tmp/citron.db"
 
     return "sqlite:///./citron.db"

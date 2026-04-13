@@ -117,6 +117,7 @@ The current model is `gemini-2.5-flash-lite` (configured via `GEMINI_MODEL` in `
 Citron/
 ├── backend/
 │   ├── main.py                  # FastAPI app, all routes
+│   ├── server.py                # Vercel entrypoint shim (re-exports app)
 │   ├── scraper.py               # Pipeline orchestrator
 │   ├── filtering.py             # Deterministic filter + RawEvent DTO
 │   ├── ai_filter.py             # Gemini batch classification
@@ -236,6 +237,59 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 Access at [http://your-server:8000](http://your-server:8000).
+
+---
+
+## Deployment (Vercel Services)
+
+Citron uses [Vercel Services](https://vercel.com/docs/services) (`experimentalServices` in `vercel.json`) to deploy the Vite frontend and the FastAPI backend as two independently built units under a single domain.
+
+### How it works
+
+| Service | Route prefix | Entrypoint |
+|---------|-------------|------------|
+| Frontend (Vite) | `/` | `frontend/` |
+| Backend (FastAPI) | `/_/backend` | `backend/` → auto-discovers `backend/server.py` |
+
+Requests to `/_/backend/api/*` are routed to FastAPI with the full path preserved, so routes registered as `/_/backend/api/stats`, etc. in `backend/main.py` match correctly.
+
+### Required Vercel project settings
+
+1. In your Vercel project → **Settings → General**, set **Framework Preset** to **Services**.
+2. Add the following **Environment Variables** in Vercel → **Settings → Environment Variables**:
+
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `GEMINI_API_KEY` | Yes | Google Gemini key for AI classification |
+| `BRAVE_SEARCH_API_KEY` | Recommended | Layer 3 scraping; DuckDuckGo fallback is bot-blocked |
+| `DATABASE_URL` | Strongly recommended | Postgres URL (e.g. Neon, Supabase). Without this, Vercel falls back to ephemeral SQLite at `/tmp` — **data is lost on every cold start** |
+| `GEMINI_MODEL` | No | Defaults to `gemini-2.5-flash-lite` |
+| `USER_REGION` | No | Defaults to `Ontario, Canada` |
+
+### Test locally before deploying
+
+Install the [Vercel CLI](https://vercel.com/docs/cli) (`npm i -g vercel`) then run all services together without hitting Vercel Cloud:
+
+```bash
+vercel dev -L
+```
+
+Verify the backend is reachable:
+
+```bash
+curl http://localhost:3000/_/backend/api/stats
+curl http://localhost:3000/_/backend/api/events
+```
+
+Both should return JSON (empty arrays / zero counts on a fresh DB). If they return 404 or HTML, the backend service is not mounted — check that `vercel.json` has `experimentalServices` and the Vercel project framework is set to **Services**.
+
+### Deploy
+
+```bash
+vercel deploy --prod
+```
+
+Or push to your connected Git branch — Vercel will build and deploy both services automatically.
 
 ---
 
