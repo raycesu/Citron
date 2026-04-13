@@ -65,8 +65,8 @@ def test_relevant_blockchain_keyword():
     assert is_relevant_event(event) is True
 
 
-def test_relevant_hackathon_keyword():
-    event = _make(title="University Hackathon 2024")
+def test_relevant_hackathon_with_blockchain_keyword():
+    event = _make(title="University Web3 Hackathon 2024")
     assert is_relevant_event(event) is True
 
 
@@ -88,17 +88,22 @@ def test_irrelevant_tech_only_without_campus_or_event_anchor():
     assert is_relevant_event(event) is False
 
 
-def test_relevant_tech_with_campus_or_event_anchor():
+def test_tech_campus_without_blockchain_rejected():
     event = _make(
         title="Computer vision intensive",
         description="Graduate cohort; on campus",
     )
-    assert is_relevant_event(event) is True
+    assert is_relevant_event(event) is False
 
 
-def test_trusted_source_passes_without_keyword():
+def test_trusted_domain_still_requires_keywords():
     event = _make(title="Annual Event", url="https://ethglobal.com/events/annual")
-    assert is_relevant_event(event, trusted_source=True) is True
+    assert is_relevant_event(event) is False
+
+
+def test_trusted_domain_passes_with_blockchain_keyword():
+    event = _make(title="ETHGlobal — L2 Build Day", url="https://ethglobal.com/events/l2-day")
+    assert is_relevant_event(event) is True
 
 
 # ---------------------------------------------------------------------------
@@ -229,3 +234,24 @@ def test_filter_events_rejects_irrelevant():
     result = filter_events(events)
     assert len(result) == 1
     assert result[0].title == "Blockchain Workshop"
+
+
+def test_art_conference_without_crypto_rejected():
+    event = _make(
+        title="Contemporary Art Conference 2026",
+        description="Galleries, curators, and collectors summit",
+    )
+    assert is_relevant_event(event) is False
+
+
+def test_agricultural_fintech_summit_without_crypto_rejected():
+    event = _make(
+        title="Agri-Fintech Summit",
+        description="Farm finance, lending, and rural banking innovation",
+    )
+    assert is_relevant_event(event) is False
+
+
+def test_eth_abbreviation_in_title_passes():
+    event = _make(title="ETH Denver Side Events", description="Meet builders")
+    assert is_relevant_event(event) is True

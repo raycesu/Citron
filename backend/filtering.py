@@ -2,9 +2,10 @@
 Deterministic event filtering applied before any AI classification.
 Only events passing this stage are forwarded to Gemini, keeping API costs low.
 
-Gates for blockchain/crypto hackathons and conferences (any chain). Broad tech
-terms only count when paired with campus/student/event context in the same text;
-Canada/US fit is handled downstream (Gemini + API filters), not here.
+Gates for blockchain/crypto hackathons and conferences (any chain). Every
+listing must show an explicit crypto or chain signal in title + description
+(generic “conference”, “summit”, or “fintech” alone is not enough). Canada/US
+fit is handled downstream (Gemini + API filters), not here.
 """
 import re
 from dataclasses import dataclass, field
@@ -22,50 +23,22 @@ BLOCKCHAIN_KEYWORDS: set[str] = {
     "arbitrum", "optimism", "base chain", "starknet", "scroll", "zksync",
     "web 3", "ipfs", "filecoin", "cosmos", "ibc protocol",
     "bitcoin", "lightning network", "sui", "aptos", "rollup", "validium",
+    "solidity", "vyper", "foundry", "hardhat", "cosmwasm",
+    "erc-20", "erc20", "erc-721", "erc721", "eip-",
+    "devcon", "devconnect",
 }
 
-HACKATHON_KEYWORDS: set[str] = {
-    "hackathon", "hack", "buildathon", "buidlathon", "hacker house",
-    "workshop", "conference", "summit", "devcon", "devconnect",
-    "bootcamp", "boot camp", "developer grant", "bounty", "sprint",
-    "symposium", "colloquium", "student chapter",
-}
-
-# Broader tech keywords — only match when EVENT_OR_CAMPUS_ANCHORS appear in the same text
-TECH_KEYWORDS: set[str] = {
-    "artificial intelligence", "machine learning", "deep learning",
-    "large language model", "llm", "generative ai", "gen ai",
-    "data science", "data engineering", "cybersecurity", "infosec",
-    "open source", "developer", "software engineer", "software development",
-    "startup", "fintech", "edtech", "healthtech", "cleantech",
-    "university hackathon", "student hackathon", "coding competition",
-    "programming contest", "tech event", "tech conference",
-    "computer science", "computer vision", "robotics",
-    "pitch competition",
-}
-
-# Required in title+description when only TECH_KEYWORDS match (not blockchain/hackathon)
-EVENT_OR_CAMPUS_ANCHORS: frozenset[str] = frozenset(
-    {
-        "university",
-        "college",
-        "campus",
-        "student",
-        "students",
-        "undergraduate",
-        "graduate",
-        "faculty",
-        "hackathon",
-        "conference",
-        "summit",
-        "symposium",
-        "workshop",
-        "meetup",
-    }
+# Abbreviations / brands not covered by substring keyword checks (word boundaries).
+_BLOCKCHAIN_SIGNAL_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r"\beth\b", re.IGNORECASE),
+    re.compile(r"\bethglobal\b", re.IGNORECASE),
+    re.compile(r"\bbtc\b", re.IGNORECASE),
+    re.compile(r"\bxrp\b", re.IGNORECASE),
 )
 
 TRUSTED_SOURCES: set[str] = {
-    # Hackathon / blockchain-native platforms — listings skip keyword checks
+    # Hackathon / blockchain-native platforms (domain allowlist for helpers/tests).
+    # All listings still pass the same keyword gate as other sources.
     "ethglobal.com",
     "devpost.com",
     "devfolio.co",
@@ -149,15 +122,14 @@ def is_trusted_source(url: str) -> bool:
         return False
 
 
-def _text_passes_keywords(text: str) -> bool:
+def _has_blockchain_signal(text: str) -> bool:
+    """True if title + description clearly reference crypto, chains, or major ecosystem brands."""
+    if not text or not text.strip():
+        return False
     lower = text.lower()
     if any(kw in lower for kw in BLOCKCHAIN_KEYWORDS):
         return True
-    if any(kw in lower for kw in HACKATHON_KEYWORDS):
-        return True
-    if any(kw in lower for kw in TECH_KEYWORDS):
-        return any(a in lower for a in EVENT_OR_CAMPUS_ANCHORS)
-    return False
+    return any(p.search(text) for p in _BLOCKCHAIN_SIGNAL_PATTERNS)
 
 
 def is_valid_luma_url(url: str) -> bool:
@@ -191,28 +163,24 @@ def is_valid_event_title(title: str) -> bool:
     return not any(p.match(stripped) for p in _NON_EVENT_TITLE_PATTERNS)
 
 
-def is_relevant_event(event: RawEvent, trusted_source: bool = False) -> bool:
+def is_relevant_event(event: RawEvent) -> bool:
     """
     Return True if the event should proceed past deterministic gating.
-    All events must pass basic sanity checks (valid title, valid URL).
-    Trusted sources skip keyword checks; all others need blockchain/hackathon
-    keywords, or a tech keyword together with campus/student/event context.
+    Every source must pass the same rules after title/URL sanity checks: the
+    combined title + description must include an explicit blockchain/web3 signal
+    (see BLOCKCHAIN_KEYWORDS and _BLOCKCHAIN_SIGNAL_PATTERNS).
     """
     if not is_valid_event_title(event.title):
         return False
     if not is_valid_luma_url(event.url):
         return False
-    if trusted_source:
-        return True
     combined = f"{event.title} {event.description}"
-    return _text_passes_keywords(combined)
+    return _has_blockchain_signal(combined)
 
 
 def filter_events(events: list[RawEvent]) -> list[RawEvent]:
-    """Apply keyword/trust gate; discard listings unlikely to be blockchain events."""
-    return [
-        e for e in events if is_relevant_event(e, trusted_source=is_trusted_source(e.url))
-    ]
+    """Apply keyword gate; discard listings unlikely to be blockchain events."""
+    return [e for e in events if is_relevant_event(e)]
 
 
 _YEAR_IN_TITLE = re.compile(r"\b(20\d{2})\b")

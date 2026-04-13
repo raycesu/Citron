@@ -68,11 +68,9 @@ These are the highest-signal, most reliable sources. All results pass the keywor
 
 Before any event reaches Gemini, it must pass `filter_events()` in `backend/filtering.py`:
 
-- **Trusted sources** (ethglobal.com, devpost.com, devfolio.co, dorahacks.io, encode.club, gitcoin.co, superteam.fun, solana.com, near.org, polkadot.network) — pass automatically, no keyword check needed. Note: luma.com is **not** trusted since it is a general-purpose platform; all Luma events must pass the keyword filter.
-- **All other sources** — title + description must match at least one path:
-  - **Blockchain keywords**: `blockchain`, `web3`, `ethereum`, `solana`, `bitcoin`, `defi`, `nft`, `zk`, `dao`, `dapp`, `polygon`, `arbitrum`, `starknet`, `rollup`, `ipfs`, `cosmos`, and 30+ more
-  - **Hackathon / event keywords**: `hackathon`, `buildathon`, `hacker house`, `workshop`, `conference`, `summit`, `symposium`, `colloquium`, `student chapter`, `bootcamp`, `bounty`, etc.
-  - **Tech keywords** (AI, ML, startup, etc.): only count if the **same** title+description also mentions campus/student/event context (e.g. `university`, `college`, `campus`, `student`, `conference`, `summit`, `meetup`). This cuts generic tech listings before Gemini.
+- **Every source** (including ethglobal.com, devpost.com, devfolio.co, dorahacks.io, encode.club, gitcoin.co, superteam.fun, solana.com, near.org, polkadot.network, Luma, and search hits) — combined **title + description** must include an explicit **blockchain / web3 / chain** signal. Generic labels alone (e.g. “conference”, “summit”, “fintech”, “hackathon”) are **not** enough, so art fairs, ag finance, and other off-topic listings drop out before Gemini.
+  - **Keyword substring set**: `blockchain`, `web3`, `ethereum`, `solana`, `bitcoin`, `defi`, `nft`, `zk`, `dao`, `dapp`, `polygon`, `arbitrum`, `starknet`, `rollup`, `solidity`, `devcon`, and 40+ more in `backend/filtering.py`
+  - **Word-boundary tokens**: standalone `ETH`, `ETHGlobal`, `BTC`, `XRP` (covers short titles like “ETH Denver”)
 - **Title sanity check** — rejects UI artefacts like "Sign In", "Explore Events", "Load More", "My Calendar", etc.
 - **Luma URL check** — rejects Luma navigation/auth/category pages (e.g. `luma.com/explore`, `luma.com/crypto` as top-level slugs)
 - **Future-only filter** — drops events whose `start_date` is in the past (kept if `end_date` is still in the future, or if date is unknown)
