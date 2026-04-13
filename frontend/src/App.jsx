@@ -284,8 +284,24 @@ export default function App() {
 
   // Called by Navbar after a scan completes (receives the scan detail object).
   // Uses softRefresh so the existing grid stays visible during the reload.
-  const handleScrapeComplete = useCallback(() => {
-    loadStats()
+  // On Vercel, each lambda invocation has its own ephemeral SQLite DB, so the
+  // stats API call may hit a cold instance with an empty DB and return zeros.
+  // To avoid this, the pipeline now embeds a current_stats snapshot taken from
+  // the same instance that ran the scan, and we apply it directly here.
+  const handleScrapeComplete = useCallback((scanDetail) => {
+    if (scanDetail?.current_stats) {
+      setStats({
+        total_events: scanDetail.current_stats.total_events,
+        travel_grants: scanDetail.current_stats.travel_grants,
+        in_person_events: scanDetail.current_stats.in_person_events,
+        canada_us_events: scanDetail.current_stats.canada_us_events,
+        events_next_7_days: scanDetail.current_stats.events_next_7_days,
+        last_scraped_at: scanDetail.scraped_at ?? null,
+        gemini_rate_limited_today: scanDetail.gemini_rate_limited ?? false,
+      })
+    } else {
+      loadStats()
+    }
     setOffset(0)
     loadEvents(filters, 0, false, true)
   }, [loadStats, loadEvents, filters])

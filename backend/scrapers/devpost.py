@@ -3,6 +3,7 @@ Devpost scraper – uses the public JSON API.
 Endpoint: https://devpost.com/api/hackathons
 """
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -64,7 +65,7 @@ class DevpostScraper(BaseScraper):
             country, province_state = _infer_country_province(location)
 
             start_date = _parse_date(item.get("submission_period_dates", ""))
-            prize = item.get("prize_amount", "")
+            prize = _strip_html(str(item.get("prize_amount", "") or ""))
             description = item.get("tagline", "") or ""
 
             # Detect online/in-person
@@ -88,6 +89,14 @@ class DevpostScraper(BaseScraper):
         except Exception as exc:
             logger.debug(f"Devpost parse error: {exc}")
             return None
+
+
+def _strip_html(text: str) -> str:
+    """Remove HTML tags from a string and normalise whitespace."""
+    if not text:
+        return text
+    cleaned = re.sub(r"<[^>]+>", "", text)
+    return " ".join(cleaned.split()).strip()
 
 
 def _parse_date(date_str: str) -> datetime | None:

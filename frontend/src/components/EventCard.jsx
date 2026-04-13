@@ -1,5 +1,10 @@
 import { useState } from "react";
 
+const stripHtml = (str) => {
+  if (!str) return str;
+  return str.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+};
+
 function formatDate(dateStr) {
   if (!dateStr) return null;
   const d = new Date(dateStr);
@@ -272,7 +277,7 @@ export default function EventCard({ event }) {
             {event.country}
           </span>
         )}
-        {event.prize_pool && (
+        {event.prize_pool && stripHtml(event.prize_pool) && (
           <span style={{
             background: 'rgba(100,180,255,0.08)',
             color: 'rgba(150,200,255,0.7)',
@@ -281,7 +286,7 @@ export default function EventCard({ event }) {
             fontSize: '11px',
             padding: '3px 10px',
           }}>
-            {event.prize_pool}
+            {stripHtml(event.prize_pool)}
           </span>
         )}
       </div>

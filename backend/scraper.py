@@ -10,10 +10,10 @@ partial or anomalous scrape never wipes valid data.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from backend.ai_filter import classify_events, gemini_rate_limit_active_for_quota_day
@@ -217,6 +217,21 @@ async def run_pipeline(layers: list[str] | None = None) -> dict:
             f"stale_deleted={stale_deleted}, status={publish_status}"
         )
 
+        # Capture live stats from the same DB session/instance so the frontend
+        # can display accurate counts immediately without a separate API call.
+        # This matters on Vercel where each invocation gets its own ephemeral DB.
+        _now = datetime.now(timezone.utc).replace(tzinfo=None)
+        _week = _now + timedelta(days=7)
+        current_stats = {
+            "total_events": db.query(func.count(Event.id)).scalar() or 0,
+            "travel_grants": db.query(func.count(Event.id)).filter(Event.has_travel_grant.is_(True)).scalar() or 0,
+            "in_person_events": db.query(func.count(Event.id)).filter(Event.is_inperson.is_(True)).scalar() or 0,
+            "canada_us_events": db.query(func.count(Event.id)).filter(Event.country.in_(["Canada", "USA"])).scalar() or 0,
+            "events_next_7_days": db.query(func.count(Event.id)).filter(
+                and_(Event.start_date >= _now, Event.start_date <= _week)
+            ).scalar() or 0,
+        }
+
     _last_scrape_at = datetime.now(timezone.utc).replace(tzinfo=None)
     elapsed = (_last_scrape_at - start).total_seconds()
 
@@ -233,6 +248,7 @@ async def run_pipeline(layers: list[str] | None = None) -> dict:
         "elapsed_seconds": round(elapsed, 1),
         "scraped_at": _last_scrape_at.isoformat(),
         "gemini_rate_limited": gemini_rate_limit_active_for_quota_day(),
+        "current_stats": current_stats,
     }
     logger.info(f"Pipeline complete: {summary}")
     return summary
