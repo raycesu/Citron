@@ -56,8 +56,8 @@ def test_not_trusted_source_random():
 # ---------------------------------------------------------------------------
 
 
-def _make(title="", description="", url="https://example.com"):
-    return RawEvent(title=title, url=url, description=description)
+def _make(title="", description="", url="https://example.com", source=""):
+    return RawEvent(title=title, url=url, description=description, source=source)
 
 
 def test_relevant_blockchain_keyword():
@@ -254,4 +254,53 @@ def test_agricultural_fintech_summit_without_crypto_rejected():
 
 def test_eth_abbreviation_in_title_passes():
     event = _make(title="ETH Denver Side Events", description="Meet builders")
+    assert is_relevant_event(event) is True
+
+
+def test_cryptography_without_crypto_word_rejected():
+    """'crypto' substring must not match inside 'cryptography'."""
+    event = _make(
+        title="Applied Cryptography Workshop",
+        description="RSA, AES, and secure messaging for engineers",
+    )
+    assert is_relevant_event(event) is False
+
+
+def test_luma_love_workshop_rejected_even_if_crypto_mentioned():
+    event = _make(
+        title="Love Workshop",
+        description="Explore vulnerability and crypto metaphors for couples",
+        url="https://luma.com/e/love",
+        source="luma",
+    )
+    assert is_relevant_event(event) is False
+
+
+def test_luma_womens_web3_conference_not_blocked():
+    event = _make(
+        title="Women's Web3 Leadership Conference",
+        description="Panels and networking for women builders",
+        url="https://luma.com/e/w3w",
+        source="luma",
+    )
+    assert is_relevant_event(event) is True
+
+
+def test_luma_founder_brunch_rejected_without_strong_terms():
+    event = _make(
+        title="Founder Brunch: Building Together",
+        description="Founders share growth stories and founder-market fit",
+        url="https://luma.com/e/brunch",
+        source="luma",
+    )
+    assert is_relevant_event(event) is False
+
+
+def test_luma_founder_brunch_passes_with_ethereum():
+    event = _make(
+        title="Founder Brunch: Building on Ethereum",
+        description="Coffee and smart contract demos",
+        url="https://luma.com/e/eth-brunch",
+        source="luma",
+    )
     assert is_relevant_event(event) is True

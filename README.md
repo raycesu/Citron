@@ -68,9 +68,10 @@ These are the highest-signal, most reliable sources. All results pass the keywor
 
 Before any event reaches Gemini, it must pass `filter_events()` in `backend/filtering.py`:
 
-- **Every source** (including ethglobal.com, devpost.com, devfolio.co, dorahacks.io, encode.club, gitcoin.co, superteam.fun, solana.com, near.org, polkadot.network, Luma, and search hits) — combined **title + description** must include an explicit **blockchain / web3 / chain** signal. Generic labels alone (e.g. “conference”, “summit”, “fintech”, “hackathon”) are **not** enough, so art fairs, ag finance, and other off-topic listings drop out before Gemini.
-  - **Keyword substring set**: `blockchain`, `web3`, `ethereum`, `solana`, `bitcoin`, `defi`, `nft`, `zk`, `dao`, `dapp`, `polygon`, `arbitrum`, `starknet`, `rollup`, `solidity`, `devcon`, and 40+ more in `backend/filtering.py`
-  - **Word-boundary tokens**: standalone `ETH`, `ETHGlobal`, `BTC`, `XRP` (covers short titles like “ETH Denver”)
+- **Every source** — combined **title + description** must match **word- or phrase-level** crypto signals (regex with boundaries), not loose substrings. That avoids false positives like **cryptography** (contains “crypto”), generic **protocol** / **optimism** / **scroll** English, **token** in “love token”, etc.
+  - **Examples of matches**: `blockchain`, `web3`, `cryptocurrency`, whole-word `crypto`, `ethereum`, `smart contract`, `defi`, `nft`, `arbitrum`, `solidity`, `on-chain`, `layer 2`, `ERC-20`, `EIP-1559`, and the full list in `backend/filtering.py`
+  - **Abbreviations**: standalone `ETH`, `ETHGlobal`, `BTC`, `XRP`
+  - **Luma** — extra title patterns drop common social / founder / wellness noise (e.g. love workshops, generic women’s conferences, founder brunches) **unless** strong chain terms still appear in the full copy (so “Women’s Web3 Conference” stays).
 - **Title sanity check** — rejects UI artefacts like "Sign In", "Explore Events", "Load More", "My Calendar", etc.
 - **Luma URL check** — rejects Luma navigation/auth/category pages (e.g. `luma.com/explore`, `luma.com/crypto` as top-level slugs)
 - **Future-only filter** — drops events whose `start_date` is in the past (kept if `end_date` is still in the future, or if date is unknown)

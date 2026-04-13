@@ -13,22 +13,155 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
-BLOCKCHAIN_KEYWORDS: set[str] = {
-    "blockchain", "web3", "crypto", "cryptocurrency", "ethereum", "solana",
-    "defi", "smart contract", "smart contracts", "zk", "zero knowledge",
-    "zero-knowledge", "layer2", "layer 2", "l2", "nft", "polygon", "avalanche",
-    "cardano", "polkadot", "chainlink", "protocol", "dao", "dapp",
-    "decentralized", "metamask", "wallet", "token", "dex", "yield farming",
-    "staking", "consensus", "validator", "substrate", "near protocol",
-    "arbitrum", "optimism", "base chain", "starknet", "scroll", "zksync",
-    "web 3", "ipfs", "filecoin", "cosmos", "ibc protocol",
-    "bitcoin", "lightning network", "sui", "aptos", "rollup", "validium",
-    "solidity", "vyper", "foundry", "hardhat", "cosmwasm",
-    "erc-20", "erc20", "erc-721", "erc721", "eip-",
-    "devcon", "devconnect",
-}
+# Word-boundary and phrase patterns only. Plain substring checks are unsafe:
+# e.g. "crypto" matches "cryptography", "protocol" matches social/business copy,
+# "optimism" / "scroll" are common English, "token" matches "love token", etc.
+_BLOCKCHAIN_REGEX_CHUNKS: tuple[str, ...] = (
+    r"\bblockchain\b",
+    r"\bweb3\b",
+    r"\bweb\s*3\b",
+    r"\bcryptocurrency\b",
+    r"\bcrypto\b",  # whole word only — not "cryptography"
+    r"\bethereum\b",
+    r"\bsolana\b",
+    r"\bbitcoin\b",
+    r"\bdefi\b",
+    r"\bnft\b",
+    r"\bnfts\b",
+    r"\bdao\b",
+    r"\bdapp\b",
+    r"\bdex\b",
+    r"\bsmart\s+contracts?\b",
+    r"\bzero[\s\-]?knowledge\b",
+    r"\bchainlink\b",
+    r"\barbitrum\b",
+    r"\bstarknet\b",
+    r"\bzksync\b",
+    r"\bzk\s*sync\b",
+    r"\bmetamask\b",
+    r"\bavalanche\b",
+    r"\bcardano\b",
+    r"\bpolkadot\b",
+    r"\bpolygon\b",
+    r"\bnear\s+protocol\b",
+    r"\bfilecoin\b",
+    r"\bipfs\b",
+    r"\bcosmos\b",
+    r"\bibc\s+protocol\b",
+    r"\bsui\b",
+    r"\baptos\b",
+    r"\bsubstrate\b",
+    r"\bcosmwasm\b",
+    r"\bsolidity\b",
+    r"\bvyper\b",
+    r"\bfoundry\b",
+    r"\bhardhat\b",
+    r"\bdevcon\b",
+    r"\bdevconnect\b",
+    r"\blightning\s+network\b",
+    r"\byield\s+farming\b",
+    r"\bbase\s+chain\b",
+    r"\berc[\s\-]?20\b",
+    r"\berc20\b",
+    r"\berc[\s\-]?721\b",
+    r"\berc721\b",
+    r"\beip[\s\-]?\d+",
+    r"\bzkevm\b",
+    r"\bzk[\s\-]?evm\b",
+    r"\brollup\b",
+    r"\bvalidium\b",
+    r"\blayer[\s\-]?2\b",
+    r"\blayer\s*2\b",
+    r"\bl2\b",
+    r"\bstaking\b",
+    r"\btokenomics\b",
+    r"\bairdrop\b",
+    r"\bon[\s\-]?chain\b",
+    r"\bcross[\s\-]?chain\b",
+)
 
-# Abbreviations / brands not covered by substring keyword checks (word boundaries).
+_BLOCKCHAIN_RES: tuple[re.Pattern, ...] = tuple(
+    re.compile(p, re.IGNORECASE) for p in _BLOCKCHAIN_REGEX_CHUNKS
+)
+
+# Strong chain / product terms — used to override Luma social-lifestyle title matches.
+_STRONG_CHAIN_RES: tuple[re.Pattern, ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\bblockchain\b",
+        r"\bweb3\b",
+        r"\bweb\s*3\b",
+        r"\bethereum\b",
+        r"\bsolana\b",
+        r"\bbitcoin\b",
+        r"\bdefi\b",
+        r"\bnft\b",
+        r"\bnfts\b",
+        r"\bchainlink\b",
+        r"\barbitrum\b",
+        r"\bstarknet\b",
+        r"\bzksync\b",
+        r"\bzk\s*sync\b",
+        r"\bmetamask\b",
+        r"\bpolkadot\b",
+        r"\bavalanche\b",
+        r"\bcardano\b",
+        r"\bcryptocurrency\b",
+        r"\bsmart\s+contracts?\b",
+        r"\bzero[\s\-]?knowledge\b",
+        r"\bnear\s+protocol\b",
+        r"\bbase\s+chain\b",
+        r"\blightning\s+network\b",
+        r"\byield\s+farming\b",
+        r"\berc[\s\-]?\d+",
+        r"\beip[\s\-]?\d+",
+        r"\bzkevm\b",
+        r"\bzk[\s\-]?evm\b",
+        r"\bdapp\b",
+        r"\bdex\b",
+        r"\bdao\b",
+        r"\bfilecoin\b",
+        r"\bipfs\b",
+        r"\bcosmos\b",
+        r"\bsolidity\b",
+        r"\bfoundry\b",
+        r"\bhardhat\b",
+        r"\bcosmwasm\b",
+        r"\bvyper\b",
+        r"\bsubstrate\b",
+        r"\baptos\b",
+        r"\bsui\b",
+        r"\bpolygon\b",
+        r"\bon[\s\-]?chain\b",
+        r"\bcross[\s\-]?chain\b",
+    )
+)
+
+# Luma lists many social / founder / lifestyle events; drop obvious categories
+# unless title+description still contain strong chain terms (e.g. "Women in Web3").
+_LUMA_SOCIAL_TITLE_RES: tuple[re.Pattern, ...] = (
+    re.compile(r"\blove\s+workshop\b", re.IGNORECASE),
+    re.compile(r"\bself[\s\-]*love\b", re.IGNORECASE),
+    re.compile(r"\brelationship\s+(coach|workshop|therapy)\b", re.IGNORECASE),
+    re.compile(r"\bdating\s+(night|event|mixer|workshop)\b", re.IGNORECASE),
+    re.compile(r"\bwomen'?s?\s+(conference|summit|festival|gathering|retreat)\b", re.IGNORECASE),
+    re.compile(r"\bwomen\s+conference\b", re.IGNORECASE),
+    re.compile(
+        r"\bfounders?\s+(breakfast|brunch|dinner|mixer|meetup|meet[\s\-]?up|drinks|coffee|"
+        r"hangout|hang[\s\-]?out|social|circle|night|hour|break|event|summit|forum)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bfounders?\s+night\b", re.IGNORECASE),
+    re.compile(r"\bstartup\s+(dating|mixer)\b", re.IGNORECASE),
+    re.compile(r"\byoga\s", re.IGNORECASE),
+    re.compile(r"\bmeditation\s", re.IGNORECASE),
+    re.compile(r"\bmanifestation\s", re.IGNORECASE),
+    re.compile(r"\bspiritual\s+(retreat|workshop|circle)\b", re.IGNORECASE),
+    re.compile(r"\bsound\s*bath\b", re.IGNORECASE),
+    re.compile(r"\bwellness\s+retreat\b", re.IGNORECASE),
+)
+
+# Abbreviations / brands not covered by the chunk regexes.
 _BLOCKCHAIN_SIGNAL_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"\beth\b", re.IGNORECASE),
     re.compile(r"\bethglobal\b", re.IGNORECASE),
@@ -126,10 +259,39 @@ def _has_blockchain_signal(text: str) -> bool:
     """True if title + description clearly reference crypto, chains, or major ecosystem brands."""
     if not text or not text.strip():
         return False
-    lower = text.lower()
-    if any(kw in lower for kw in BLOCKCHAIN_KEYWORDS):
+    if any(p.search(text) for p in _BLOCKCHAIN_RES):
         return True
     return any(p.search(text) for p in _BLOCKCHAIN_SIGNAL_PATTERNS)
+
+
+def _has_strong_chain_signal(text: str) -> bool:
+    """Subset of signals for Luma social-title overrides (avoids lone generic 'crypto')."""
+    if not text or not text.strip():
+        return False
+    if any(p.search(text) for p in _STRONG_CHAIN_RES):
+        return True
+    return any(p.search(text) for p in _BLOCKCHAIN_SIGNAL_PATTERNS)
+
+
+def _is_luma_event(event: RawEvent) -> bool:
+    if (event.source or "").lower() == "luma":
+        return True
+    try:
+        host = urlparse(event.url).netloc.lower().replace("www.", "")
+        return host.endswith("luma.com") or host == "lu.ma"
+    except Exception:
+        return False
+
+
+def _luma_social_title_blocked(title: str, combined: str) -> bool:
+    """
+    True if a Luma listing looks like social/lifestyle/founder noise and lacks
+    strong on-topic chain terms in the full copy.
+    """
+    for p in _LUMA_SOCIAL_TITLE_RES:
+        if p.search(title):
+            return not _has_strong_chain_signal(combined)
+    return False
 
 
 def is_valid_luma_url(url: str) -> bool:
@@ -166,16 +328,20 @@ def is_valid_event_title(title: str) -> bool:
 def is_relevant_event(event: RawEvent) -> bool:
     """
     Return True if the event should proceed past deterministic gating.
-    Every source must pass the same rules after title/URL sanity checks: the
-    combined title + description must include an explicit blockchain/web3 signal
-    (see BLOCKCHAIN_KEYWORDS and _BLOCKCHAIN_SIGNAL_PATTERNS).
+    Combined title + description must match word/phrase-level chain signals
+    (not loose substrings). Luma listings also drop common social/founder
+    spam titles unless strong chain terms appear anywhere in the copy.
     """
     if not is_valid_event_title(event.title):
         return False
     if not is_valid_luma_url(event.url):
         return False
     combined = f"{event.title} {event.description}"
-    return _has_blockchain_signal(combined)
+    if not _has_blockchain_signal(combined):
+        return False
+    if _is_luma_event(event) and _luma_social_title_blocked(event.title, combined):
+        return False
+    return True
 
 
 def filter_events(events: list[RawEvent]) -> list[RawEvent]:
