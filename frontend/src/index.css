@@ -1,0 +1,146 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: #080808;
+    color: #F0F0F0;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(ellipse 80% 40% at 15% -5%, rgba(255,98,0,0.18) 0%, transparent 70%),
+      radial-gradient(ellipse 50% 30% at 85% 5%,  rgba(255,80,0,0.10) 0%, transparent 60%);
+    background-attachment: fixed;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #111;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #FF6200;
+  }
+}
+
+@layer components {
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-green {
+    @apply bg-emerald-500/15 text-emerald-400 border border-emerald-500/25;
+  }
+
+  .badge-gray {
+    @apply bg-zinc-700/50 text-zinc-400 border border-zinc-600/30;
+  }
+
+  .badge-amber {
+    @apply bg-amber-500/15 text-amber-400 border border-amber-500/25;
+  }
+
+  .badge-orange {
+    @apply bg-orange-500/15 text-orange-400 border border-orange-500/25;
+  }
+
+  .badge-blue {
+    @apply bg-blue-500/15 text-blue-400 border border-blue-500/25;
+  }
+
+  .tag-pill {
+    @apply inline-flex items-center cursor-pointer select-none;
+    background: #151515;
+    border: 1px solid rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.45);
+    border-radius: 999px;
+    padding: 6px 16px;
+    font-size: 13px;
+    font-weight: 400;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+
+  .tag-pill:hover {
+    border-color: rgba(255,255,255,0.18);
+    color: rgba(255,255,255,0.75);
+  }
+
+  .tag-pill-active {
+    background: rgba(255,98,0,0.15) !important;
+    border-color: rgba(255,98,0,0.6) !important;
+    color: #FF8040 !important;
+    font-weight: 500;
+  }
+
+  .select-dark {
+    background: #151515;
+    border: 1px solid rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.6);
+    border-radius: 10px;
+    padding: 6px 12px;
+    font-size: 13px;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+  }
+
+  .select-dark:focus {
+    border-color: rgba(255,98,0,0.5);
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center gap-2 font-semibold;
+    background: linear-gradient(135deg, #FF7A00 0%, #FF3D00 100%);
+    color: #fff;
+    font-size: 13px;
+    padding: 8px 18px;
+    border-radius: 10px;
+    border: none;
+    cursor: pointer;
+    letter-spacing: 0.01em;
+    box-shadow: 0 0 20px rgba(255,90,0,0.35);
+    transition: all 0.15s ease;
+    text-decoration: none;
+  }
+
+  .btn-primary:hover {
+    box-shadow: 0 0 28px rgba(255,90,0,0.55);
+    transform: translateY(-1px);
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg
+           bg-surface-3 hover:bg-surface-4 text-white font-medium text-sm
+           border border-surface-4 transition-colors duration-150;
+  }
+}
