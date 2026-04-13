@@ -1,4 +1,5 @@
-const BASE = "/api";
+const DEFAULT_BASE = import.meta.env.DEV ? "/api" : "/_/backend/api"
+const BASE = import.meta.env.VITE_API_BASE || DEFAULT_BASE
 
 async function apiFetch(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, options);
