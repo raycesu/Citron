@@ -33,6 +33,62 @@ from backend.scrapers.search_discovery import SearchDiscoveryScraper
 
 logger = logging.getLogger(__name__)
 
+# Province names produced by `_infer_country_province` / Luma — used to keep
+# Canada when Gemini mislabels US-centric copy as USA.
+_CANADIAN_PROVINCES = frozenset(
+    {
+        "Ontario",
+        "British Columbia",
+        "Alberta",
+        "Quebec",
+        "Nova Scotia",
+        "New Brunswick",
+        "Manitoba",
+        "Saskatchewan",
+    }
+)
+
+
+def _merge_event_country(raw: RawEvent, cls: dict) -> str:
+    """
+    Merge Gemini `country` with scraper geography.
+
+    The model often infers USA from English descriptions even when structured
+    scraper fields place the event in Canada. Prefer confident scraper signals
+    (Luma geo, Canadian province) over a conflicting AI label.
+    """
+    if not cls:
+        return raw.country or ""
+
+    ai = (cls.get("country") or "").strip()
+    raw_c = (raw.country or "").strip()
+    if not ai:
+        return raw_c
+
+    raw_prov = (raw.province_state or "").strip()
+    is_canadian_province = raw_prov in _CANADIAN_PROVINCES
+
+    if ai == "Online":
+        if raw.is_online:
+            return "Online"
+        if raw_c in ("Canada", "USA"):
+            return raw_c
+
+    # Both say Canada vs USA: trust scraper when we parsed a province/state
+    if raw_c in ("Canada", "USA") and ai in ("Canada", "USA") and raw_c != ai:
+        if raw_prov:
+            return raw_c
+
+    if raw_c == "Canada" and ai in ("USA", "Other"):
+        if raw.source == "luma" or is_canadian_province:
+            return "Canada"
+
+    if raw_c == "USA" and ai == "Canada" and raw.source == "luma":
+        return "USA"
+
+    return ai
+
+
 MAJOR_SCRAPERS = [DevpostScraper, ETHGlobalScraper]
 MINOR_SCRAPERS = [LumaScraper]
 SEARCH_SCRAPERS = [SearchDiscoveryScraper]
@@ -291,7 +347,7 @@ def _upsert_event(
     relevance = float(cls.get("relevance_score") or 0)
     priority = float(cls.get("priority_score") or 0)
     has_grant = bool(cls.get("has_travel_grant", raw.has_travel_grant))
-    country = cls.get("country") or raw.country or ""
+    country = _merge_event_country(raw, cls) or ""
 
     if cls.get("is_inperson") is not None:
         is_inperson = bool(cls["is_inperson"])

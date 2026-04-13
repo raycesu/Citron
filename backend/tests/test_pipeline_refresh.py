@@ -126,6 +126,50 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def test_merge_event_country_prefers_canada_when_gemini_says_usa():
+    """Luma/Devpost often have correct geo; Gemini can mislabel from US-centric text."""
+    from backend.scraper import _merge_event_country
+
+    raw = RawEvent(
+        title="ETH Meetup Toronto",
+        url="https://luma.com/e/x",
+        source="luma",
+        country="Canada",
+        province_state="Ontario",
+    )
+    cls = {"country": "USA", "relevance_score": 8}
+    assert _merge_event_country(raw, cls) == "Canada"
+
+
+def test_merge_event_country_prefers_usa_when_gemini_says_canada():
+    """Symmetric: parsed US state should not be overwritten by the model."""
+    from backend.scraper import _merge_event_country
+
+    raw = RawEvent(
+        title="Hackathon",
+        url="https://devpost.com/x",
+        source="devpost",
+        country="USA",
+        province_state="California",
+    )
+    cls = {"country": "Canada"}
+    assert _merge_event_country(raw, cls) == "USA"
+
+
+def test_merge_event_country_luma_canada_without_province_still_wins_vs_usa():
+    from backend.scraper import _merge_event_country
+
+    raw = RawEvent(
+        title="Web3 Night",
+        url="https://luma.com/e/y",
+        source="luma",
+        country="Canada",
+        province_state="",
+    )
+    cls = {"country": "USA"}
+    assert _merge_event_country(raw, cls) == "Canada"
+
+
 # ---------------------------------------------------------------------------
 # 1. Full successful refresh — inserts new events
 # ---------------------------------------------------------------------------

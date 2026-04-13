@@ -100,6 +100,8 @@ For each event return exactly these fields:
 8. country (string): one of Canada, USA, Online, Other
 9. province_state (string or null): e.g. Ontario, California, British Columbia
 
+When the input already lists city/country (or location text clearly naming a Canadian or US city or province), treat that as ground truth for field 8–9. Do not override Canada with USA because the event title sounds American. Online only when the event is clearly virtual-only with no primary Canadian or US host city.
+
 Return ONLY a valid JSON array — no markdown fences, no explanation."""
 
 
