@@ -240,22 +240,22 @@ Access at [http://your-server:8000](http://your-server:8000).
 
 ---
 
-## Deployment (Vercel Services)
+## Deployment (Vercel)
 
-Citron uses [Vercel Services](https://vercel.com/docs/services) (`experimentalServices` in `vercel.json`) to deploy the Vite frontend and the FastAPI backend as two independently built units under a single domain.
+Citron deploys to Vercel using a standard setup: the Vite frontend is built as a static site and the FastAPI backend runs as a Vercel Python serverless function at `/api`.
 
 ### How it works
 
-| Service | Route prefix | Entrypoint |
-|---------|-------------|------------|
-| Frontend (Vite) | `/` | `frontend/` |
-| Backend (FastAPI) | `/_/backend` | `backend/` → auto-discovers `backend/server.py` |
+| Layer | Route | Source |
+|-------|-------|--------|
+| Frontend (Vite SPA) | `/*` (static files + SPA fallback) | `frontend/` → built to `frontend/dist` |
+| Backend (FastAPI) | `/api/*` | `api/index.py` → re-exports `backend/main.py:app` |
 
-Requests to `/_/backend/api/*` are routed to FastAPI with the full path preserved, so routes registered as `/_/backend/api/stats`, etc. in `backend/main.py` match correctly.
+The build command and output directory are declared in `vercel.json`; Vercel rewrites `/api/*` to the Python function and falls back to `index.html` for all other routes (SPA routing).
 
 ### Required Vercel project settings
 
-1. In your Vercel project → **Settings → General**, set **Framework Preset** to **Services**.
+1. In your Vercel project → **Settings → General**, set **Framework Preset** to **Other** (the build command in `vercel.json` takes over).
 2. Add the following **Environment Variables** in Vercel → **Settings → Environment Variables**:
 
 | Variable | Required | Notes |
@@ -268,20 +268,20 @@ Requests to `/_/backend/api/*` are routed to FastAPI with the full path preserve
 
 ### Test locally before deploying
 
-Install the [Vercel CLI](https://vercel.com/docs/cli) (`npm i -g vercel`) then run all services together without hitting Vercel Cloud:
+Install the [Vercel CLI](https://vercel.com/docs/cli) (`npm i -g vercel`) then run everything locally:
 
 ```bash
-vercel dev -L
+vercel dev
 ```
 
 Verify the backend is reachable:
 
 ```bash
-curl http://localhost:3000/_/backend/api/stats
-curl http://localhost:3000/_/backend/api/events
+curl http://localhost:3000/api/stats
+curl http://localhost:3000/api/events
 ```
 
-Both should return JSON (empty arrays / zero counts on a fresh DB). If they return 404 or HTML, the backend service is not mounted — check that `vercel.json` has `experimentalServices` and the Vercel project framework is set to **Services**.
+Both should return JSON (empty arrays / zero counts on a fresh DB).
 
 ### Deploy
 
@@ -289,7 +289,7 @@ Both should return JSON (empty arrays / zero counts on a fresh DB). If they retu
 vercel deploy --prod
 ```
 
-Or push to your connected Git branch — Vercel will build and deploy both services automatically.
+Or push to your connected Git branch — Vercel will build and deploy automatically.
 
 ---
 

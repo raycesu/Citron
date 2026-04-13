@@ -1,8 +1,7 @@
 """
-Vercel entrypoint shim.
+Legacy shim — kept for local uvicorn convenience only.
 
-Vercel's FastAPI runtime auto-discovers the ASGI app from standard filenames
-(app.py, index.py, server.py).  The actual application lives in main.py, so
-this file re-exports `app` under a name Vercel will find.
+The Vercel entrypoint is now api/index.py (standard Vercel Python function).
+This file is no longer used in production.
 """
 from backend.main import app  # noqa: F401
