@@ -188,6 +188,8 @@ class LumaScraper(BaseScraper):
             city = geo.get("city") or event_data.get("city") or ""
             country_code = geo.get("country_code") or ""
             full_country = geo.get("country") or ""
+            # city_state is available when geo is obfuscated (e.g. "Toronto, Ontario")
+            city_state = geo.get("city_state") or ""
 
             # Map country codes to our taxonomy
             if country_code in ("CA", "CAN") or "canada" in full_country.lower():
@@ -196,12 +198,15 @@ class LumaScraper(BaseScraper):
                 country = "USA"
             elif event_data.get("virtual"):
                 country = "Online"
+            elif city_state:
+                # Obfuscated addresses omit country_code; infer from city_state
+                # (e.g. "Toronto, Ontario" → Canada, "San Francisco, California" → USA)
+                country, _ = _infer_country_province(city_state)
             else:
                 country = "Other" if full_country else "Online"
 
-            _, province_state = _infer_country_province(
-                f"{city} {full_country}"
-            )
+            location_hint = city_state or f"{city} {full_country}"
+            _, province_state = _infer_country_province(location_hint)
 
             start_at = event_data.get("start_at") or ""
             end_at = event_data.get("end_at") or ""
