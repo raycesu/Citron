@@ -7,7 +7,20 @@ from sqlalchemy.orm import Session, sessionmaker
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./citron.db")
+
+def _resolve_database_url() -> str:
+    configured_url = os.getenv("DATABASE_URL")
+    if configured_url:
+        return configured_url
+
+    # Vercel file system is read-only except /tmp
+    if os.getenv("VERCEL"):
+        return "sqlite:////tmp/citron.db"
+
+    return "sqlite:///./citron.db"
+
+
+DATABASE_URL = _resolve_database_url()
 
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
