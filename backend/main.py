@@ -113,6 +113,7 @@ class ScrapeResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+@app.get("/_/backend/api/events", response_model=list[EventOut])
 @app.get("/api/events", response_model=list[EventOut])
 def list_events(
     tag: Optional[str] = Query(None),
@@ -157,6 +158,7 @@ def list_events(
     return q.offset(offset).limit(limit).all()
 
 
+@app.get("/_/backend/api/events/{event_id}", response_model=EventOut)
 @app.get("/api/events/{event_id}", response_model=EventOut)
 def get_event(event_id: int, db: Session = Depends(get_db)):
     event = db.query(Event).filter(Event.id == event_id).first()
@@ -165,6 +167,7 @@ def get_event(event_id: int, db: Session = Depends(get_db)):
     return event
 
 
+@app.get("/_/backend/api/stats", response_model=StatsOut)
 @app.get("/api/stats", response_model=StatsOut)
 def get_stats(db: Session = Depends(get_db)):
     total = db.query(func.count(Event.id)).scalar() or 0
@@ -197,6 +200,7 @@ def get_stats(db: Session = Depends(get_db)):
     )
 
 
+@app.post("/_/backend/api/scrape", response_model=ScrapeResult)
 @app.post("/api/scrape", response_model=ScrapeResult)
 async def trigger_scrape(layers: Optional[list[str]] = None):
     """Manually trigger a scrape cycle. Optionally specify layers."""
@@ -208,6 +212,7 @@ async def trigger_scrape(layers: Optional[list[str]] = None):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.get("/_/backend/api/tags")
 @app.get("/api/tags")
 def list_tags(db: Session = Depends(get_db)):
     return [{"id": t.id, "name": t.name} for t in db.query(Tag).order_by(Tag.name).all()]
