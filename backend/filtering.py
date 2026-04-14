@@ -4,8 +4,14 @@ Only events passing this stage are forwarded to Gemini, keeping API costs low.
 
 Gates for blockchain/crypto hackathons and conferences (any chain). Every
 listing must show an explicit crypto or chain signal in title + description
-(generic “conference”, “summit”, or “fintech” alone is not enough). Canada/US
+(generic "conference", "summit", or "fintech" alone is not enough). Canada/US
 fit is handled downstream (Gemini + API filters), not here.
+
+Two admission paths exist:
+  1. Primary: title + description matches a strong blockchain/crypto signal.
+  2. Secondary (university leeway): event-type anchor + university/student
+     affiliation + at least one chain-adjacent term. Lets campus blockchain
+     club events through even when the scraped description is sparse.
 """
 import re
 from dataclasses import dataclass, field
@@ -78,6 +84,22 @@ _BLOCKCHAIN_REGEX_CHUNKS: tuple[str, ...] = (
     r"\bairdrop\b",
     r"\bon[\s\-]?chain\b",
     r"\bcross[\s\-]?chain\b",
+    # --- Expanded ecosystem vocabulary ---
+    # "digital asset(s)" is the standard industry term for crypto/blockchain assets
+    r"\bdigital\s+assets?\b",
+    # DLT / distributed ledger — precise technical term for blockchain infrastructure
+    r"\bdistributed\s+ledger\b",
+    r"\bdlt\b",
+    # "decentralized" in an event context strongly implies blockchain tech
+    r"\bdecentralized\b",
+    # Canton Network is an enterprise blockchain platform; "canton network" is specific enough
+    r"\bcanton\s+network\b",
+    # "permissionless" is blockchain-native vocabulary with no common off-chain use
+    r"\bpermissionless\b",
+    # Consensus mechanisms — unambiguously blockchain context
+    r"\bproof[\s\-]of[\s\-](work|stake|authority|history)\b",
+    # Asset tokenization is a blockchain-specific use case
+    r"\btokenization\b",
 )
 
 _BLOCKCHAIN_RES: tuple[re.Pattern, ...] = tuple(
@@ -85,6 +107,7 @@ _BLOCKCHAIN_RES: tuple[re.Pattern, ...] = tuple(
 )
 
 # Strong chain / product terms — used to override Luma social-lifestyle title matches.
+# Keep in sync with _BLOCKCHAIN_REGEX_CHUNKS for the most specific signals.
 _STRONG_CHAIN_RES: tuple[re.Pattern, ...] = tuple(
     re.compile(p, re.IGNORECASE)
     for p in (
@@ -134,6 +157,14 @@ _STRONG_CHAIN_RES: tuple[re.Pattern, ...] = tuple(
         r"\bpolygon\b",
         r"\bon[\s\-]?chain\b",
         r"\bcross[\s\-]?chain\b",
+        # Expanded strong signals
+        r"\bdigital\s+assets?\b",
+        r"\bdistributed\s+ledger\b",
+        r"\bdlt\b",
+        r"\bdecentralized\b",
+        r"\bcanton\s+network\b",
+        r"\bpermissionless\b",
+        r"\btokenization\b",
     )
 )
 
@@ -167,6 +198,49 @@ _BLOCKCHAIN_SIGNAL_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"\bethglobal\b", re.IGNORECASE),
     re.compile(r"\bbtc\b", re.IGNORECASE),
     re.compile(r"\bxrp\b", re.IGNORECASE),
+    # University blockchain org shorthands — specific enough to pass on their own
+    re.compile(r"\bb@b\b", re.IGNORECASE),      # Blockchain at Berkeley
+    re.compile(r"\bcantor8\b", re.IGNORECASE),  # Cantor8 (Canton Network company)
+)
+
+# ---------------------------------------------------------------------------
+# University / campus blockchain club leeway (secondary admission path)
+# ---------------------------------------------------------------------------
+
+# Event must look like an actual event, not a topic page or newsletter.
+_EVENT_TYPE_ANCHOR_RE: re.Pattern = re.compile(
+    r"\b(hackathon|hacker[\s\-]house|conference|summit|symposium|workshop|"
+    r"bootcamp|boot[\s\-]camp|seminar|forum|competition|challenge|sprint|"
+    r"demo[\s\-]day|pitch[\s\-]competition|camp)\b",
+    re.IGNORECASE,
+)
+
+# University / student affiliation signals.
+_UNIVERSITY_AFFILIATION_RE: re.Pattern = re.compile(
+    r"\b(university|college|campus|student|undergraduate|graduate|academic|"
+    r"ubc|stanford|berkeley|cornell|harvard|yale|princeton|mcmaster|"
+    r"waterloo|u\s+of\s+t|uoft|columbia|nyu|ucla|usc|mit|carnegie\s+mellon|"
+    r"fordham|georgetown|uc\s+[a-z]+|cal\s+poly|georgia\s+tech)\b",
+    re.IGNORECASE,
+)
+
+# Chain-adjacent terms: broader than the main signal list but, when combined
+# with an event anchor AND a university affiliation, reliably indicate a
+# blockchain-focused event rather than generic campus fintech/tech.
+_CHAIN_ADJACENT_RES: tuple[re.Pattern, ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\bdigital\s+assets?\b",      # industry-standard term for crypto holdings
+        r"\bdistributed\s+ledger\b",   # DLT generic
+        r"\bdlt\b",
+        r"\bdecentralized\b",
+        r"\bcanton\b",                 # Canton Network; safe in university+event context
+        r"\btokenization\b",
+        r"\bdigital\s+currency\b",
+        r"\bcrypto\b",                 # already in main signals; belt-and-suspenders here
+        r"\bblockchain\b",             # shouldn't be needed but keeps the path consistent
+        r"\bweb3\b",
+    )
 )
 
 TRUSTED_SOURCES: set[str] = {
@@ -273,6 +347,27 @@ def _has_strong_chain_signal(text: str) -> bool:
     return any(p.search(text) for p in _BLOCKCHAIN_SIGNAL_PATTERNS)
 
 
+def _has_university_blockchain_context(combined: str) -> bool:
+    """
+    Secondary admission path for campus-affiliated blockchain events.
+
+    Returns True when all three conditions are met:
+      1. A recognisable event-type anchor (hackathon, conference, summit, …)
+      2. A university / student affiliation signal
+      3. At least one chain-adjacent term from a broader (but still targeted) list
+
+    This allows university blockchain clubs and campus conferences to pass the
+    deterministic gate even when the scraped description is sparse, while still
+    blocking generic campus tech or fintech events that carry none of the
+    chain-adjacent vocabulary.
+    """
+    if not _EVENT_TYPE_ANCHOR_RE.search(combined):
+        return False
+    if not _UNIVERSITY_AFFILIATION_RE.search(combined):
+        return False
+    return any(p.search(combined) for p in _CHAIN_ADJACENT_RES)
+
+
 def _is_luma_event(event: RawEvent) -> bool:
     if (event.source or "").lower() == "luma":
         return True
@@ -328,16 +423,25 @@ def is_valid_event_title(title: str) -> bool:
 def is_relevant_event(event: RawEvent) -> bool:
     """
     Return True if the event should proceed past deterministic gating.
-    Combined title + description must match word/phrase-level chain signals
-    (not loose substrings). Luma listings also drop common social/founder
-    spam titles unless strong chain terms appear anywhere in the copy.
+
+    Primary path: combined title + description must match word/phrase-level
+    chain signals (not loose substrings).
+
+    Secondary path (university leeway): event-type anchor + university/student
+    affiliation + chain-adjacent term. Passes campus blockchain club events
+    even when the scraped description is sparse, without opening the gate to
+    generic campus tech or fintech events.
+
+    Luma listings also drop common social/founder spam titles unless strong
+    chain terms appear anywhere in the copy.
     """
     if not is_valid_event_title(event.title):
         return False
     if not is_valid_luma_url(event.url):
         return False
     combined = f"{event.title} {event.description}"
-    if not _has_blockchain_signal(combined):
+    passes_signal = _has_blockchain_signal(combined) or _has_university_blockchain_context(combined)
+    if not passes_signal:
         return False
     if _is_luma_event(event) and _luma_social_title_blocked(event.title, combined):
         return False
