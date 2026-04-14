@@ -5,24 +5,39 @@ export default {
     extend: {
       colors: {
         c: {
-          bg:          '#080808',
-          surface:     '#0f0f0f',
-          card:        '#121212',
-          hover:       '#181818',
-          border:      'rgba(255,255,255,0.06)',
-          borderHover: 'rgba(255,120,30,0.35)',
-          orange:      '#FF6200',
+          // backgrounds
+          bg:          '#0F1117',
+          surface:     '#12141C',
+          card:        '#1E2130',
+          hover:       '#242840',
+          // borders
+          border:      'rgba(99,120,255,0.12)',
+          borderHover: 'rgba(99,120,255,0.35)',
+          borderFeat:  'rgba(255,107,0,0.45)',
+          // primary accent
+          orange:      '#FF6B00',
           orangeL:     '#FF8C00',
-          orangeD:     '#CC3300',
-          muted:       'rgba(255,255,255,0.45)',
-          faint:       'rgba(255,255,255,0.2)',
+          orangeD:     '#E05000',
+          // secondary accent
+          blue:        '#3B82F6',
+          blueD:       '#2563EB',
+          purple:      '#8B5CF6',
+          teal:        '#0EA5E9',
+          // text
+          text:        '#F0F0FF',
+          muted:       '#A0A8C0',
+          faint:       '#6B7280',
+          // score colors
+          scoreHigh:   '#22C55E',
+          scoreMid:    '#F59E0B',
+          scoreLow:    '#EF4444',
         },
         surface: {
-          0: "#0a0a0a",
-          1: "#111111",
-          2: "#181818",
-          3: "#222222",
-          4: "#2e2e2e",
+          0: "#0F1117",
+          1: "#12141C",
+          2: "#1E2130",
+          3: "#242840",
+          4: "#2D3250",
         },
       },
       fontFamily: {

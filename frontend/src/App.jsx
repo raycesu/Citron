@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { fetchEvents, fetchStats } from "./api/events"
+import { ApiRequestError, fetchEvents, fetchStats } from "./api/events"
 import EventCard from "./components/EventCard"
 import FilterBar from "./components/FilterBar"
 import Navbar from "./components/Navbar"
@@ -41,8 +41,8 @@ function EmptyState({ filtered }) {
           width: "56px",
           height: "56px",
           borderRadius: "16px",
-          background: "rgba(255,98,0,0.08)",
-          border: "1px solid rgba(255,98,0,0.2)",
+          background: "rgba(255,107,0,0.1)",
+          border: "1px solid rgba(255,107,0,0.3)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -54,7 +54,7 @@ function EmptyState({ filtered }) {
           height="22"
           viewBox="0 0 24 24"
           fill="none"
-          stroke="rgba(255,98,0,0.6)"
+          stroke="rgba(255,140,0,0.8)"
           strokeWidth="1.5"
           aria-hidden="true"
         >
@@ -63,14 +63,14 @@ function EmptyState({ filtered }) {
         </svg>
       </div>
       <h3
-        style={{ fontSize: "16px", fontWeight: 600, color: "#F0F0F0", marginBottom: "6px" }}
+        style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "6px" }}
       >
         No events found
       </h3>
       <p
         style={{
           fontSize: "13px",
-          color: "rgba(255,255,255,0.35)",
+          color: "var(--text-secondary)",
           maxWidth: "280px",
           lineHeight: 1.6,
         }}
@@ -90,8 +90,8 @@ function LoadingGrid() {
         <div
           key={i}
           style={{
-            background: "linear-gradient(160deg, #161616 0%, #101010 100%)",
-            border: "1px solid rgba(255,255,255,0.07)",
+            background: "linear-gradient(160deg, #1E2130 0%, #181C2C 100%)",
+            border: "1px solid rgba(99,120,255,0.12)",
             borderRadius: "20px",
             padding: "22px 24px",
             animation: "pulse 2s cubic-bezier(0.4,0,0.6,1) infinite",
@@ -100,7 +100,7 @@ function LoadingGrid() {
           <div
             style={{
               height: "16px",
-              background: "rgba(255,255,255,0.06)",
+              background: "rgba(99,120,255,0.08)",
               borderRadius: "6px",
               width: "75%",
               marginBottom: "12px",
@@ -109,7 +109,7 @@ function LoadingGrid() {
           <div
             style={{
               height: "12px",
-              background: "rgba(255,255,255,0.04)",
+              background: "rgba(99,120,255,0.06)",
               borderRadius: "6px",
               width: "50%",
               marginBottom: "8px",
@@ -118,7 +118,7 @@ function LoadingGrid() {
           <div
             style={{
               height: "12px",
-              background: "rgba(255,255,255,0.04)",
+              background: "rgba(99,120,255,0.06)",
               borderRadius: "6px",
               width: "33%",
               marginBottom: "16px",
@@ -127,7 +127,7 @@ function LoadingGrid() {
           <div
             style={{
               height: "12px",
-              background: "rgba(255,255,255,0.04)",
+              background: "rgba(99,120,255,0.06)",
               borderRadius: "6px",
               width: "100%",
               marginBottom: "6px",
@@ -136,7 +136,7 @@ function LoadingGrid() {
           <div
             style={{
               height: "12px",
-              background: "rgba(255,255,255,0.04)",
+              background: "rgba(99,120,255,0.06)",
               borderRadius: "6px",
               width: "80%",
               marginBottom: "16px",
@@ -146,7 +146,7 @@ function LoadingGrid() {
             <div
               style={{
                 height: "20px",
-                background: "rgba(255,255,255,0.04)",
+                background: "rgba(99,120,255,0.06)",
                 borderRadius: "999px",
                 width: "64px",
               }}
@@ -154,7 +154,7 @@ function LoadingGrid() {
             <div
               style={{
                 height: "20px",
-                background: "rgba(255,255,255,0.04)",
+                background: "rgba(99,120,255,0.06)",
                 borderRadius: "999px",
                 width: "80px",
               }}
@@ -162,7 +162,7 @@ function LoadingGrid() {
           </div>
           <div
             style={{
-              borderTop: "1px solid rgba(255,255,255,0.05)",
+              borderTop: "1px solid rgba(99,120,255,0.08)",
               paddingTop: "14px",
               display: "flex",
               justifyContent: "space-between",
@@ -172,7 +172,7 @@ function LoadingGrid() {
             <div
               style={{
                 height: "12px",
-                background: "rgba(255,255,255,0.04)",
+                background: "rgba(99,120,255,0.06)",
                 borderRadius: "6px",
                 width: "96px",
               }}
@@ -180,7 +180,7 @@ function LoadingGrid() {
             <div
               style={{
                 height: "28px",
-                background: "rgba(255,255,255,0.04)",
+                background: "rgba(99,120,255,0.06)",
                 borderRadius: "10px",
                 width: "80px",
               }}
@@ -201,7 +201,7 @@ export default function App() {
   const [eventsLoading, setEventsLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [statsLoading, setStatsLoading] = useState(true)
-  const [statsError, setStatsError] = useState(false)
+  const [statsError, setStatsError] = useState(null)
   const [error, setError] = useState(null)
   const [offset, setOffset] = useState(0)
   const [hasMore, setHasMore] = useState(false)
@@ -218,13 +218,17 @@ export default function App() {
 
   const loadStats = useCallback(async () => {
     setStatsLoading(true)
-    setStatsError(false)
+    setStatsError(null)
     try {
       const data = await fetchStats()
       setStats(data)
     } catch (err) {
       console.error("Stats load failed:", err)
-      setStatsError(true)
+      const message =
+        err instanceof ApiRequestError
+          ? err.message
+          : "Could not load stats. Make sure the backend is running on port 8000."
+      setStatsError(message)
     } finally {
       setStatsLoading(false)
     }
@@ -259,7 +263,11 @@ export default function App() {
         setOffset(currentOffset + data.length)
       } catch (err) {
         if (err.name !== "AbortError") {
-          setError("Failed to load events. Make sure the backend is running.")
+          const message =
+            err instanceof ApiRequestError
+              ? err.message
+              : "Failed to load events. Make sure the backend is running on port 8000."
+          setError(message)
           console.error(err)
         }
       } finally {
@@ -336,15 +344,15 @@ export default function App() {
         >
           <div
             style={{
-              background: "rgba(220,50,50,0.07)",
-              border: "1px solid rgba(220,50,50,0.18)",
+              background: "rgba(220,50,50,0.08)",
+              border: "1px solid rgba(220,80,80,0.3)",
               borderRadius: "10px",
               padding: "10px 16px",
               fontSize: "12px",
-              color: "rgba(255,120,120,0.85)",
+              color: "rgba(255,150,150,0.95)",
             }}
           >
-            Could not load stats — make sure the backend is running.
+            {statsError}
           </div>
         </div>
       )}
@@ -375,21 +383,21 @@ export default function App() {
                   style={{
                     fontSize: "18px",
                     fontWeight: 600,
-                    color: "#F0F0F0",
+                    color: "var(--text-primary)",
                     letterSpacing: "-0.02em",
                   }}
                 >
                   Events
                 </h2>
                 {!eventsLoading && (
-                  <span style={{ fontSize: "13px", color: "rgba(255,255,255,0.25)" }}>
+                  <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
                     {events.length} result{events.length !== 1 ? "s" : ""}
                     {filters.inperson ? " · In Person" : ""}
                     {filters.country ? ` · ${filters.country}` : ""}
                   </span>
                 )}
                 {isSoftRefreshing && (
-                  <span style={{ fontSize: "11px", color: "rgba(255,255,255,0.2)" }}>
+                  <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
                     refreshing…
                   </span>
                 )}
@@ -400,15 +408,15 @@ export default function App() {
                   onClick={() => setFilters(DEFAULT_FILTERS)}
                   style={{
                     fontSize: "12px",
-                    color: "rgba(255,255,255,0.3)",
+                    color: "var(--text-muted)",
                     background: "none",
                     border: "none",
                     cursor: "pointer",
                     transition: "color 0.15s ease",
                     padding: 0,
                   }}
-                  onMouseEnter={(e) => (e.target.style.color = "#FF8040")}
-                  onMouseLeave={(e) => (e.target.style.color = "rgba(255,255,255,0.3)")}
+                  onMouseEnter={(e) => (e.target.style.color = "var(--accent-orange-l)")}
+                  onMouseLeave={(e) => (e.target.style.color = "var(--text-muted)")}
                 >
                   Reset filters
                 </button>
@@ -420,11 +428,11 @@ export default function App() {
               <div
                 style={{
                   background: "rgba(220,50,50,0.08)",
-                  border: "1px solid rgba(220,50,50,0.2)",
+                  border: "1px solid rgba(220,80,80,0.3)",
                   borderRadius: "12px",
                   padding: "14px 18px",
                   fontSize: "13px",
-                  color: "rgba(255,100,100,0.9)",
+                  color: "rgba(255,150,150,0.95)",
                   marginBottom: "16px",
                 }}
               >
@@ -436,7 +444,7 @@ export default function App() {
             {eventsLoading && !isSoftRefreshing ? (
               <LoadingGrid />
             ) : events.length === 0 && !eventsLoading ? (
-              <EmptyState filtered={isFiltered} />
+              error ? null : <EmptyState filtered={isFiltered} />
             ) : (
               <div
                 style={{
@@ -459,23 +467,25 @@ export default function App() {
                       style={{
                         padding: "10px 28px",
                         borderRadius: "12px",
-                        background: "rgba(255,255,255,0.04)",
-                        border: "1px solid rgba(255,255,255,0.08)",
+                        background: "var(--bg-surface)",
+                        border: "1px solid rgba(99,120,255,0.22)",
                         fontSize: "13px",
-                        color: "rgba(255,255,255,0.5)",
+                        color: "var(--text-secondary)",
                         cursor: loadingMore ? "not-allowed" : "pointer",
                         opacity: loadingMore ? 0.5 : 1,
                         transition: "all 0.15s ease",
                       }}
                       onMouseEnter={(e) => {
                         if (!loadingMore) {
-                          e.target.style.borderColor = "rgba(255,98,0,0.4)"
-                          e.target.style.color = "rgba(255,255,255,0.8)"
+                          e.target.style.borderColor = "rgba(99,120,255,0.5)"
+                          e.target.style.color = "var(--text-primary)"
+                          e.target.style.boxShadow = "0 0 12px rgba(99,120,255,0.15)"
                         }
                       }}
                       onMouseLeave={(e) => {
-                        e.target.style.borderColor = "rgba(255,255,255,0.08)"
-                        e.target.style.color = "rgba(255,255,255,0.5)"
+                        e.target.style.borderColor = "rgba(99,120,255,0.22)"
+                        e.target.style.color = "var(--text-secondary)"
+                        e.target.style.boxShadow = "none"
                       }}
                     >
                       {loadingMore ? "Loading…" : "Load more"}
@@ -491,7 +501,7 @@ export default function App() {
       {/* Footer */}
       <footer
         style={{
-          borderTop: "1px solid rgba(255,255,255,0.06)",
+          borderTop: "1px solid rgba(99,120,255,0.1)",
           marginTop: "48px",
           padding: "24px",
         }}
@@ -505,12 +515,12 @@ export default function App() {
             justifyContent: "space-between",
           }}
         >
-          <span style={{ fontSize: "12px", color: "rgba(255,255,255,0.2)" }}>
+          <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
             Citron — blockchain conferences &amp; hackathons in the US &amp; Canada, with a lens on
             universities and travel subsidies
           </span>
           <span
-            style={{ fontSize: "12px", color: "rgba(255,255,255,0.15)", fontFamily: "monospace" }}
+            style={{ fontSize: "12px", color: "var(--text-muted)", fontFamily: "monospace" }}
           >
             v1.0.0
           </span>

@@ -4,6 +4,71 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Semantic palette tokens ──────────────────────────────────────────────── */
+:root {
+  /* backgrounds */
+  --bg-app:        #0F1117;
+  --bg-surface:    #12141C;
+  --bg-card:       #1E2130;
+  --bg-card-hover: #242840;
+
+  /* borders */
+  --border-subtle:  rgba(99, 120, 255, 0.12);
+  --border-hover:   rgba(99, 120, 255, 0.35);
+  --border-feat:    rgba(255, 107, 0, 0.45);
+  --border-card:    rgba(99, 120, 255, 0.15);
+
+  /* primary accent — orange */
+  --accent-orange:  #FF6B00;
+  --accent-orange-l:#FF8C00;
+  --accent-orange-d:#E05000;
+
+  /* secondary accent — blue / purple */
+  --accent-blue:    #3B82F6;
+  --accent-purple:  #8B5CF6;
+  --accent-teal:    #0EA5E9;
+
+  /* text tiers */
+  --text-primary:   #F0F0FF;
+  --text-secondary: #A0A8C0;   /* ≥ AA on #1E2130 */
+  --text-muted:     #6B7280;   /* captions / placeholders */
+  --text-link:      #FF8C00;
+
+  /* badge fills */
+  --badge-prize-bg:   #0E7490;   /* vivid teal fill */
+  --badge-prize-text: #F0F9FF;
+  --badge-ip-bg:      rgba(255, 107, 0, 0.22);
+  --badge-ip-border:  rgba(255, 107, 0, 0.55);
+  --badge-ip-text:    #FFBC80;
+  --badge-online-bg:  rgba(99, 120, 255, 0.12);
+  --badge-online-border: rgba(99, 120, 255, 0.35);
+  --badge-online-text: #93C5FD;
+  --badge-travel-bg:  rgba(245, 158, 11, 0.18);
+  --badge-travel-border: rgba(245, 158, 11, 0.45);
+  --badge-travel-text: #FCD34D;
+  --badge-region-bg:  rgba(139, 92, 246, 0.12);
+  --badge-region-border: rgba(139, 92, 246, 0.3);
+  --badge-region-text: #C4B5FD;
+
+  /* tag chip */
+  --tag-bg:     rgba(99, 120, 255, 0.07);
+  --tag-border: rgba(99, 120, 255, 0.2);
+  --tag-text:   #A0A8C0;
+
+  /* score gradient */
+  --score-grad: linear-gradient(90deg, #FF6B00 0%, #EC4899 100%);
+
+  /* score label colors */
+  --score-high: #22C55E;
+  --score-mid:  #F59E0B;
+  --score-low:  #EF4444;
+
+  /* CTA */
+  --cta-bg:     linear-gradient(135deg, #FF8C00 0%, #FF3D00 100%);
+  --cta-glow:   rgba(255, 107, 0, 0.45);
+  --cta-glow-h: rgba(255, 107, 0, 0.65);
+}
+
 @layer base {
   *, *::before, *::after {
     box-sizing: border-box;
@@ -16,66 +81,40 @@
   }
 
   body {
-    background-color: #080808;
-    color: #F0F0F0;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
     font-family: 'Inter', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     min-height: 100vh;
     background-image:
-      radial-gradient(ellipse 80% 40% at 15% -5%, rgba(255,98,0,0.18) 0%, transparent 70%),
-      radial-gradient(ellipse 50% 30% at 85% 5%,  rgba(255,80,0,0.10) 0%, transparent 60%);
+      radial-gradient(ellipse 80% 40% at 15% -5%, rgba(255, 107, 0, 0.14) 0%, transparent 70%),
+      radial-gradient(ellipse 50% 30% at 85% 5%,  rgba(59, 130, 246, 0.08) 0%, transparent 60%);
     background-attachment: fixed;
   }
 
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-
-  ::-webkit-scrollbar-track {
-    background: #111;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    background: #333;
-    border-radius: 3px;
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    background: #FF6200;
-  }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg-surface); }
+  ::-webkit-scrollbar-thumb { background: #2D3250; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--accent-orange); }
 }
 
 @layer components {
+  /* ── Badge base ──────────────────────────────────────────────────────────── */
   .badge {
     @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium;
   }
+  .badge-green  { @apply bg-emerald-500/20 text-emerald-300 border border-emerald-500/35; }
+  .badge-gray   { @apply bg-blue-900/30    text-blue-200   border border-blue-700/30;    }
+  .badge-amber  { @apply bg-amber-500/20   text-amber-300  border border-amber-500/35;   }
+  .badge-orange { @apply bg-orange-500/20  text-orange-300 border border-orange-500/35;  }
+  .badge-blue   { @apply bg-blue-500/20    text-blue-300   border border-blue-500/35;    }
 
-  .badge-green {
-    @apply bg-emerald-500/15 text-emerald-400 border border-emerald-500/25;
-  }
-
-  .badge-gray {
-    @apply bg-zinc-700/50 text-zinc-400 border border-zinc-600/30;
-  }
-
-  .badge-amber {
-    @apply bg-amber-500/15 text-amber-400 border border-amber-500/25;
-  }
-
-  .badge-orange {
-    @apply bg-orange-500/15 text-orange-400 border border-orange-500/25;
-  }
-
-  .badge-blue {
-    @apply bg-blue-500/15 text-blue-400 border border-blue-500/25;
-  }
-
+  /* ── Filter pills ────────────────────────────────────────────────────────── */
   .tag-pill {
     @apply inline-flex items-center cursor-pointer select-none;
-    background: #151515;
-    border: 1px solid rgba(255,255,255,0.08);
-    color: rgba(255,255,255,0.45);
+    background: var(--bg-surface);
+    border: 1px solid rgba(99, 120, 255, 0.22);
+    color: var(--text-secondary);
     border-radius: 999px;
     padding: 6px 16px;
     font-size: 13px;
@@ -85,21 +124,24 @@
   }
 
   .tag-pill:hover {
-    border-color: rgba(255,255,255,0.18);
-    color: rgba(255,255,255,0.75);
+    border-color: rgba(99, 120, 255, 0.5);
+    color: var(--text-primary);
+    box-shadow: 0 0 10px rgba(99, 120, 255, 0.15);
   }
 
   .tag-pill-active {
-    background: rgba(255,98,0,0.15) !important;
-    border-color: rgba(255,98,0,0.6) !important;
-    color: #FF8040 !important;
-    font-weight: 500;
+    background: linear-gradient(135deg, rgba(255, 107, 0, 0.22) 0%, rgba(236, 72, 153, 0.15) 100%) !important;
+    border-color: rgba(255, 107, 0, 0.65) !important;
+    color: #FFBC80 !important;
+    font-weight: 600;
+    box-shadow: 0 0 14px rgba(255, 107, 0, 0.2) !important;
   }
 
+  /* ── Select ──────────────────────────────────────────────────────────────── */
   .select-dark {
-    background: #151515;
-    border: 1px solid rgba(255,255,255,0.08);
-    color: rgba(255,255,255,0.6);
+    background: var(--bg-surface);
+    border: 1px solid rgba(99, 120, 255, 0.22);
+    color: var(--text-secondary);
     border-radius: 10px;
     padding: 6px 12px;
     font-size: 13px;
@@ -109,12 +151,13 @@
   }
 
   .select-dark:focus {
-    border-color: rgba(255,98,0,0.5);
+    border-color: rgba(255, 107, 0, 0.55);
   }
 
+  /* ── Buttons ─────────────────────────────────────────────────────────────── */
   .btn-primary {
     @apply inline-flex items-center gap-2 font-semibold;
-    background: linear-gradient(135deg, #FF7A00 0%, #FF3D00 100%);
+    background: var(--cta-bg);
     color: #fff;
     font-size: 13px;
     padding: 8px 18px;
@@ -122,14 +165,14 @@
     border: none;
     cursor: pointer;
     letter-spacing: 0.01em;
-    box-shadow: 0 0 20px rgba(255,90,0,0.35);
+    box-shadow: 0 0 20px var(--cta-glow);
     transition: all 0.15s ease;
     text-decoration: none;
   }
 
   .btn-primary:hover {
-    box-shadow: 0 0 28px rgba(255,90,0,0.55);
-    transform: translateY(-1px);
+    box-shadow: 0 0 30px var(--cta-glow-h);
+    transform: translateY(-1px) scale(1.02);
   }
 
   .btn-primary:disabled {
@@ -140,7 +183,14 @@
 
   .btn-secondary {
     @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg
-           bg-surface-3 hover:bg-surface-4 text-white font-medium text-sm
-           border border-surface-4 transition-colors duration-150;
+           text-white font-medium text-sm
+           border transition-colors duration-150;
+    background: var(--bg-surface);
+    border-color: rgba(99, 120, 255, 0.22);
+  }
+
+  .btn-secondary:hover {
+    background: var(--bg-card);
+    border-color: rgba(99, 120, 255, 0.4);
   }
 }

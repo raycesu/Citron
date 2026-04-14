@@ -111,10 +111,10 @@ export default function Navbar({ lastScrapedAt, onScrapeComplete }) {
         top: 0,
         zIndex: 50,
         height: "52px",
-        background: "rgba(8,8,8,0.75)",
+        background: "rgba(15,17,23,0.82)",
         backdropFilter: "blur(24px) saturate(180%)",
         WebkitBackdropFilter: "blur(24px) saturate(180%)",
-        borderBottom: "1px solid rgba(255,255,255,0.06)",
+        borderBottom: "1px solid rgba(99,120,255,0.12)",
       }}
     >
       <div
@@ -142,7 +142,7 @@ export default function Navbar({ lastScrapedAt, onScrapeComplete }) {
           className="hidden md:block"
           style={{
             fontSize: "12px",
-            color: "rgba(255,255,255,0.25)",
+            color: "var(--text-secondary)",
             letterSpacing: "0.12em",
             textTransform: "uppercase",
           }}
@@ -185,7 +185,7 @@ export default function Navbar({ lastScrapedAt, onScrapeComplete }) {
               className="hidden sm:block"
               style={{
                 fontSize: "11px",
-                color: "rgba(255,255,255,0.22)",
+                color: "var(--text-secondary)",
                 whiteSpace: "nowrap",
               }}
             >
@@ -201,7 +201,7 @@ export default function Navbar({ lastScrapedAt, onScrapeComplete }) {
             onMouseLeave={() => setBtnHovered(false)}
             aria-label="Scan for new events"
             style={{
-              background: "linear-gradient(135deg, #FF7A00 0%, #FF3D00 100%)",
+              background: "linear-gradient(135deg, #FF8C00 0%, #FF3D00 100%)",
               color: "#fff",
               fontWeight: 600,
               fontSize: "13px",
@@ -212,9 +212,9 @@ export default function Navbar({ lastScrapedAt, onScrapeComplete }) {
               letterSpacing: "0.01em",
               boxShadow:
                 btnHovered && !scanning
-                  ? "0 0 28px rgba(255,90,0,0.55)"
-                  : "0 0 20px rgba(255,90,0,0.35)",
-              transform: btnHovered && !scanning ? "translateY(-1px)" : "none",
+                  ? "0 0 30px rgba(255,107,0,0.65)"
+                  : "0 0 20px rgba(255,107,0,0.4)",
+              transform: btnHovered && !scanning ? "translateY(-1px) scale(1.02)" : "none",
               transition: "all 0.15s ease",
               opacity: scanning ? 0.6 : 1,
               display: "flex",
