@@ -52,16 +52,8 @@ export function fetchEvents(filters = {}) {
   return apiFetch(`/events${qs ? `?${qs}` : ""}`)
 }
 
-export function fetchEvent(id) {
-  return apiFetch(`/events/${id}`)
-}
-
 export function fetchStats() {
   return apiFetch("/stats")
-}
-
-export function fetchTags() {
-  return apiFetch("/tags")
 }
 
 export function triggerScrape({ layers = null, forceFullRefresh = false } = {}) {

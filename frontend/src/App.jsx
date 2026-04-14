@@ -242,17 +242,10 @@ export default function App() {
         abortRef.current = controller
       }
 
-      // softRefresh: when events are already visible, skip the full skeleton so
-      // the grid stays populated while new data loads in the background.
-      const showSkeleton = !softRefresh || !hasEventsRef.current
-
       if (append) {
         setLoadingMore(true)
       } else {
         setEventsLoading(true)
-        if (!showSkeleton) {
-          // Keep the current events in place; the grid renders with them while loading
-        }
       }
 
       setError(null)

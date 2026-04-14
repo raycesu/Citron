@@ -14,5 +14,5 @@ export default function RateLimitBanner() {
         ). Events may appear without scores or tags from the model.
       </span>
     </div>
-  );
+  )
 }

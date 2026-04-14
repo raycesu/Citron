@@ -132,7 +132,8 @@ Citron/
 │   └── tests/
 │       ├── test_filtering.py
 │       ├── test_api.py
-│       └── test_scrapers_fixtures.py
+│       ├── test_scrapers_fixtures.py
+│       └── test_pipeline_refresh.py
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx
@@ -142,7 +143,8 @@ Citron/
 │   │       ├── Navbar.jsx
 │   │       ├── StatsRow.jsx
 │   │       ├── FilterBar.jsx
-│   │       └── EventCard.jsx
+│   │       ├── EventCard.jsx
+│   │       └── RateLimitBanner.jsx
 │   ├── package.json
 │   ├── vite.config.js
 │   └── tailwind.config.js
@@ -219,6 +221,27 @@ cd Citron
 source backend/.venv/bin/activate
 pip install pytest httpx
 pytest backend/tests/ -v
+```
+
+If your local Python environment is fresh, install backend runtime dependencies first:
+
+```bash
+cd backend
+pip install -r requirements.txt
+```
+
+## Quick Bug-Check Commands
+
+Use these lightweight checks before shipping non-behavioral refactors:
+
+```bash
+# Backend
+cd backend
+python3 -m pytest tests -q
+
+# Frontend
+cd ../frontend
+npm run build
 ```
 
 ---
