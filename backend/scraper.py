@@ -535,22 +535,37 @@ def _upsert_event(
 def _sync_tags(db: Session, event: Event, tag_names: list[str]) -> None:
     """
     Replace the event's tag set with exactly tag_names.
-    Removes old associations and creates any missing Tag rows.
+    Keeps ORM relationship state in sync while creating any missing Tag rows.
     """
-    # Remove all existing associations for this event
-    db.query(EventTag).filter(EventTag.event_id == event.id).delete(
-        synchronize_session=False
-    )
+    cleaned_names: list[str] = []
+    seen_names: set[str] = set()
     for name in tag_names:
-        name = _clamp_str(name.strip(), _STR_TAG)
-        if not name:
+        clamped = _clamp_str(name.strip(), _STR_TAG)
+        if not clamped or clamped in seen_names:
             continue
-        tag = db.query(Tag).filter(Tag.name == name).first()
+        seen_names.add(clamped)
+        cleaned_names.append(clamped)
+
+    if not cleaned_names:
+        event.tags = []
+        return
+
+    existing_tags = db.query(Tag).filter(Tag.name.in_(cleaned_names)).all()
+    by_name = {tag.name: tag for tag in existing_tags}
+
+    resolved_tags: list[Tag] = []
+    for name in cleaned_names:
+        tag = by_name.get(name)
         if not tag:
             tag = Tag(name=name)
             db.add(tag)
             db.flush()
-        db.add(EventTag(event_id=event.id, tag_id=tag.id))
+            by_name[name] = tag
+        resolved_tags.append(tag)
+
+    # Relationship assignment keeps SQLAlchemy's unit-of-work consistent and
+    # prevents stale association rows from being re-inserted at flush/commit.
+    event.tags = resolved_tags
 
 
 def _cleanup_orphan_tags(db: Session) -> int:
