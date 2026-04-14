@@ -596,6 +596,11 @@ def _sync_tags(db: Session, event: Event, tag_names: list[str]) -> None:
 
 def _cleanup_orphan_tags(db: Session) -> int:
     """Delete Tag rows that have no remaining EventTag associations."""
+    # Ensure pending Event <-> Tag relationship updates are materialized before
+    # orphan detection, otherwise newly re-linked tags can be deleted
+    # prematurely and cause FK violations on commit.
+    db.flush()
+
     orphan_ids = [
         row[0]
         for row in db.query(Tag.id)
