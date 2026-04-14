@@ -219,3 +219,17 @@ def test_ethglobal_parse_item():
     assert event.url == "https://ethglobal.com/events/toronto2025"
     assert event.has_travel_grant is True
     assert event.country == "Canada"
+
+
+def test_search_discovery_drops_ethglobal_url():
+    from backend.scrapers.search_discovery import _is_ethglobal_url
+
+    assert _is_ethglobal_url("https://ethglobal.com/events/new-york-2026") is True
+    assert _is_ethglobal_url("https://devpost.com/hackathons/test") is False
+
+
+def test_search_discovery_rejects_non_event_listing_urls():
+    from backend.scrapers.search_discovery import _is_non_event_url
+
+    assert _is_non_event_url("https://luma.com/calendar") is True
+    assert _is_non_event_url("https://eventbrite.com/e/ethglobal-new-york-2026-tickets-123") is False

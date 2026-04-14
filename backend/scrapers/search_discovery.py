@@ -11,13 +11,15 @@ import asyncio
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 from dateutil import parser as dateparser
 from selectolax.parser import HTMLParser
 
-from backend.filtering import RawEvent
+from backend.filtering import RawEvent, is_valid_event_title
 from backend.scrapers.base import BaseScraper
 from backend.scrapers.devpost import _infer_country_province
 
@@ -69,6 +71,107 @@ _EVENT_LD_TYPES = frozenset(
         "SportsEvent",
     }
 )
+
+_SEARCH_BLACKLIST_HOSTS = frozenset(
+    {
+        "google.com",
+        "twitter.com",
+        "youtube.com",
+        "wikipedia.org",
+        "reddit.com",
+    }
+)
+
+_NON_EVENT_PATH_TERMS = (
+    "/calendar",
+    "/events",
+    "/discover",
+    "/explore",
+    "/community",
+    "/search",
+    "/tag/",
+    "/tags/",
+    "/categories",
+    "/category/",
+)
+
+_KEEP_QUERY_PARAMS = frozenset({"id", "event", "event_id", "slug"})
+
+
+def _canonicalize_url(raw_url: str) -> str:
+    parsed = urlparse(raw_url.strip())
+    scheme = parsed.scheme.lower() or "https"
+    host = parsed.netloc.lower().replace("www.", "")
+    path = parsed.path or ""
+    if path.endswith("/") and path != "/":
+        path = path.rstrip("/")
+    if path == "/":
+        path = ""
+    query = urlencode(
+        sorted(
+            [
+                (k, v)
+                for k, v in parse_qsl(parsed.query, keep_blank_values=False)
+                if k.lower() in _KEEP_QUERY_PARAMS
+            ]
+        ),
+        doseq=True,
+    )
+    return urlunparse((scheme, host, path, "", query, ""))
+
+
+def _host_matches(host: str, domain: str) -> bool:
+    return host == domain or host.endswith(f".{domain}")
+
+
+def _is_ethglobal_url(raw_url: str) -> bool:
+    try:
+        host = urlparse(raw_url).netloc.lower().replace("www.", "")
+        return _host_matches(host, "ethglobal.com")
+    except Exception:
+        return False
+
+
+def _is_non_event_url(raw_url: str) -> bool:
+    try:
+        parsed = urlparse(raw_url)
+        host = parsed.netloc.lower().replace("www.", "")
+        if not host:
+            return True
+
+        lowered = raw_url.lower()
+        path = (parsed.path or "").lower().rstrip("/")
+        if any(_host_matches(host, blocked) for blocked in _SEARCH_BLACKLIST_HOSTS):
+            return True
+
+        # Generic listing/community pages are noisy and often not a single event.
+        if any(term in lowered for term in _NON_EVENT_PATH_TERMS):
+            # Keep known event path formats on popular platforms.
+            if _host_matches(host, "eventbrite.com") and "/e/" in path:
+                return False
+            if _host_matches(host, "devpost.com") and "/hackathons/" in path:
+                return False
+            if _host_matches(host, "luma.com") and (
+                path.startswith("/e/") or path.startswith("/event/")
+            ):
+                return False
+            return True
+        return False
+    except Exception:
+        return True
+
+
+def _clean_location(raw_location: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (raw_location or "")).strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > 180:
+        return ""
+    if cleaned.lower().startswith("skip to content"):
+        return ""
+    if re.search(r"(facebook|twitter|x-twitter|youtube|telegram|linkedin){2,}", cleaned, re.IGNORECASE):
+        return ""
+    return cleaned
 
 
 def _ld_type_matches(types) -> bool:
@@ -201,7 +304,13 @@ class SearchDiscoveryScraper(BaseScraper):
         async with httpx.AsyncClient(follow_redirects=True) as client:
             for query in SEARCH_QUERIES[:MAX_QUERIES]:
                 urls = await self._search(client, query)
-                discovered_urls.update(urls)
+                for discovered in urls:
+                    canonical = _canonicalize_url(discovered)
+                    if _is_ethglobal_url(canonical):
+                        continue
+                    if _is_non_event_url(canonical):
+                        continue
+                    discovered_urls.add(canonical)
         if not discovered_urls:
             logger.warning("Search discovery: no URLs from any query (try Brave API key or check DDG HTML selectors).")
 
@@ -264,9 +373,7 @@ class SearchDiscoveryScraper(BaseScraper):
 
     async def _extract_event(self, client: httpx.AsyncClient, url: str) -> RawEvent | None:
         """Best-effort extraction from a discovered URL."""
-        # Skip known non-event domains
-        skip_domains = {"google.com", "twitter.com", "youtube.com", "wikipedia.org", "reddit.com"}
-        if any(d in url for d in skip_domains):
+        if _is_ethglobal_url(url) or _is_non_event_url(url):
             return None
 
         try:
@@ -283,7 +390,7 @@ class SearchDiscoveryScraper(BaseScraper):
             else:
                 title = ""
 
-            if not title:
+            if not title or not is_valid_event_title(title):
                 return None
 
             desc_node = tree.css_first('meta[property="og:description"]') or tree.css_first(
@@ -291,8 +398,20 @@ class SearchDiscoveryScraper(BaseScraper):
             )
             description = desc_node.attributes.get("content", "") if desc_node else ""
 
-            location_node = tree.css_first('[class*="location"], [class*="venue"], [itemprop="location"]')
-            location = location_node.text(strip=True) if location_node else ""
+            location = ""
+            location_meta = (
+                _meta_content(tree, "event:location")
+                or _meta_content(tree, "og:locality")
+                or _meta_content(tree, "place:location:latitude")
+            )
+            if location_meta:
+                location = location_meta
+            else:
+                location_node = tree.css_first(
+                    '[itemprop="location"], [itemprop="addressLocality"], [class*="location"], [class*="venue"]'
+                )
+                location = location_node.text(strip=True) if location_node else ""
+            location = _clean_location(location)
             country, province_state = _infer_country_province(location)
 
             start_date, end_date = extract_event_datetimes_from_tree(tree)

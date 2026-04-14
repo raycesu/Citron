@@ -30,9 +30,11 @@ from backend.ai_filter import classify_events, gemini_rate_limit_active_for_quot
 from backend.database import get_db_context
 from backend.filtering import (
     RawEvent,
+    canonicalize_event_url,
     deduplicate_raw_events,
     filter_events,
     filter_future_events,
+    is_valid_event_title,
     normalize_title,
 )
 from backend.models import Event, EventTag, Tag
@@ -42,6 +44,13 @@ from backend.scrapers.luma import LumaScraper
 from backend.scrapers.search_discovery import SearchDiscoveryScraper
 
 logger = logging.getLogger(__name__)
+
+_SOURCE_PRIORITY = {
+    "ethglobal": 100,
+    "devpost": 90,
+    "luma": 80,
+    "search_discovery": 10,
+}
 
 # Province names produced by `_infer_country_province` / Luma — used to keep
 # Canada when Gemini mislabels US-centric copy as USA.
@@ -97,6 +106,10 @@ def _merge_event_country(raw: RawEvent, cls: dict) -> str:
         return "USA"
 
     return ai
+
+
+def _source_rank(source: str) -> int:
+    return _SOURCE_PRIORITY.get((source or "").lower(), 50)
 
 
 MAJOR_SCRAPERS = [DevpostScraper, ETHGlobalScraper]
@@ -420,6 +433,7 @@ def _upsert_event(
     'skip' is returned when a fuzzy-matched canonical row is marked seen but
     no new row is inserted (avoids duplicates with different URLs).
     """
+    raw.url = canonicalize_event_url(raw.url)
     url_db = _clamp_str(raw.url, _STR_URL)
     title_db = _clamp_str(raw.title, _STR_TITLE)
     norm = _clamp_str(normalize_title(title_db), _STR_TITLE)
@@ -441,10 +455,8 @@ def _upsert_event(
         )
         if candidate and candidate.start_date and raw.start_date:
             if candidate.start_date.date() == raw.start_date.date():
-                # Mark the canonical row as seen in this scan; skip duplicate insert
-                candidate.last_seen_at = scan_ts
-                candidate.consecutive_misses = 0
-                return "skip", candidate.id
+                # Treat fuzzy duplicate as the canonical row and refresh it below.
+                existing = candidate
 
     # Compute derived fields
     relevance = float(cls.get("relevance_score") or 0)
@@ -474,12 +486,20 @@ def _upsert_event(
     prize_db = _clamp_optional_str(raw.prize_pool, _STR_PRIZE_POOL)
 
     if existing:
+        incoming_rank = _source_rank(raw.source)
+        existing_rank = _source_rank(existing.source)
+        can_override_with_incoming = incoming_rank >= existing_rank
+
         # Refresh raw fields so dates, locations, descriptions stay current
-        existing.title = title_db
+        if can_override_with_incoming and is_valid_event_title(title_db):
+            existing.title = title_db
         existing.normalized_title = norm
-        existing.description = raw.description or existing.description
-        existing.location = location_db or existing.location
-        existing.city = city_db or existing.city
+        if can_override_with_incoming or not existing.description:
+            existing.description = raw.description or existing.description
+        if can_override_with_incoming or not existing.location:
+            existing.location = location_db or existing.location
+        if can_override_with_incoming or not existing.city:
+            existing.city = city_db or existing.city
         existing.start_date = raw.start_date or existing.start_date
         existing.end_date = raw.end_date or existing.end_date
         existing.deadline = raw.deadline or existing.deadline
@@ -488,6 +508,12 @@ def _upsert_event(
         existing.is_inperson = is_inperson
         existing.has_travel_grant = has_grant
         existing.travel_grant_details = grant_details or existing.travel_grant_details
+        if can_override_with_incoming and source_db:
+            existing.source = source_db
+        if can_override_with_incoming and url_db and existing.url != url_db:
+            url_in_use = db.query(Event).filter(Event.url == url_db, Event.id != existing.id).first()
+            if not url_in_use:
+                existing.url = url_db
         # Refresh AI fields
         existing.relevance_score = relevance
         existing.priority_score = priority

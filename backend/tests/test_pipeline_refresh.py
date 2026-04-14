@@ -594,3 +594,61 @@ def test_force_full_refresh_blocked_on_scraper_failure(db):
 
     db.expire_all()
     assert db.query(Event).count() == 12  # 10 original + 2 inserted
+
+
+def test_specialized_source_overrides_search_discovery_duplicate(db):
+    """
+    When a fuzzy duplicate exists, a specialized source should overwrite
+    low-quality search_discovery metadata instead of creating a duplicate row.
+    """
+    existing = Event(
+        title="Get Your Tickets",
+        normalized_title="ethglobal new york 2026",
+        url="https://external-site.example/event/ethglobal-ny",
+        source="search_discovery",
+        location="SearchSearchSearchFacebookX-twitterYoutubeTelegramLinkedin",
+        city="new york city",
+        country="USA",
+        start_date=datetime(2026, 6, 12),
+        is_inperson=True,
+        is_online=False,
+        has_travel_grant=False,
+        priority_score=2.0,
+        relevance_score=2.0,
+        scraped_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        ai_classified=True,
+        consecutive_misses=0,
+    )
+    db.add(existing)
+    db.commit()
+    db.refresh(existing)
+
+    incoming = RawEvent(
+        title="ETHGlobal New York 2026",
+        url="https://ethglobal.com/events/new-york-2026?utm_source=search",
+        source="ethglobal",
+        location="New York City, United States, New York",
+        city="new york city",
+        country="USA",
+        start_date=datetime(2026, 6, 12),
+    )
+    pairs = [_default_cls(incoming, relevance=9, priority=9)]
+
+    with (
+        patch(_PATCHES["scrapers"], new=AsyncMock(return_value=([incoming], 0, {"ethglobal"}))),
+        patch(_PATCHES["ai"], new=AsyncMock(return_value=_cls_result(pairs))),
+        patch(_PATCHES["db"], _test_db_context),
+    ):
+        from backend.scraper import run_pipeline
+
+        result = _run(run_pipeline())
+
+    assert result["inserted"] == 0
+    assert result["updated"] == 1
+
+    db.expire_all()
+    rows = db.query(Event).all()
+    assert len(rows) == 1
+    assert rows[0].title == "ETHGlobal New York 2026"
+    assert rows[0].source == "ethglobal"
+    assert rows[0].url == "https://ethglobal.com/events/new-york-2026"

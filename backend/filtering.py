@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 # Word-boundary and phrase patterns only. Plain substring checks are unsafe:
 # e.g. "crypto" matches "cryptography", "protocol" matches social/business copy,
@@ -321,6 +321,48 @@ def normalize_title(title: str) -> str:
     return normalized
 
 
+_URL_KEEP_QUERY_KEYS = frozenset({"id", "event", "event_id", "slug"})
+
+
+def canonicalize_event_url(url: str) -> str:
+    """Canonicalize URL variants used by multiple sources for dedupe matching."""
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url.strip())
+        scheme = parsed.scheme.lower() or "https"
+        host = parsed.netloc.lower().replace("www.", "")
+        path = parsed.path or ""
+        if path.endswith("/") and path != "/":
+            path = path.rstrip("/")
+        if path == "/":
+            path = ""
+        query = urlencode(
+            sorted(
+                [
+                    (k, v)
+                    for k, v in parse_qsl(parsed.query, keep_blank_values=False)
+                    if k.lower() in _URL_KEEP_QUERY_KEYS
+                ]
+            ),
+            doseq=True,
+        )
+        return urlunparse((scheme, host, path, "", query, ""))
+    except Exception:
+        return url.strip()
+
+
+def _dedupe_location_key(event: RawEvent) -> str:
+    city = (event.city or "").strip().lower()
+    if city:
+        return city
+    location = (event.location or "").strip().lower()
+    if not location:
+        return ""
+    parts = re.split(r"[,|\-]", location, maxsplit=1)
+    return parts[0].strip()
+
+
 def is_trusted_source(url: str) -> bool:
     try:
         domain = urlparse(url).netloc.lower().replace("www.", "")
@@ -495,23 +537,27 @@ def deduplicate_raw_events(events: list[RawEvent]) -> list[RawEvent]:
     result: list[RawEvent] = []
 
     for event in events:
-        if event.url in seen_urls:
+        canonical_url = canonicalize_event_url(event.url)
+        if canonical_url in seen_urls:
             continue
 
+        location_key = _dedupe_location_key(event)
         fingerprint = (
             normalize_title(event.title),
             event.start_date.date() if event.start_date else None,
-            (event.city or "").lower().strip(),
+            location_key,
         )
-        if fingerprint in seen_fingerprints and fingerprint != (
+        weak_fingerprint = (
             normalize_title(event.title),
             None,
             "",
-        ):
+        )
+        if fingerprint in seen_fingerprints and fingerprint != weak_fingerprint:
             continue
 
-        seen_urls.add(event.url)
+        seen_urls.add(canonical_url)
         seen_fingerprints.add(fingerprint)
+        event.url = canonical_url or event.url
         result.append(event)
 
     return result

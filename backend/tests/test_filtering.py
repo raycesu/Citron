@@ -8,6 +8,7 @@ import pytest
 
 from backend.filtering import (
     RawEvent,
+    canonicalize_event_url,
     deduplicate_raw_events,
     filter_events,
     filter_future_events,
@@ -220,6 +221,20 @@ def test_no_false_dedup_different_city():
     ]
     result = deduplicate_raw_events(events)
     assert len(result) == 2
+
+
+def test_canonicalize_event_url_removes_tracking_and_fragment():
+    url = "https://www.ethglobal.com/events/new-york-2026/?utm_source=abc&utm_campaign=camp#section"
+    assert canonicalize_event_url(url) == "https://ethglobal.com/events/new-york-2026"
+
+
+def test_dedup_uses_canonicalized_url():
+    events = [
+        RawEvent(title="ETHGlobal New York 2026", url="https://ethglobal.com/events/new-york-2026"),
+        RawEvent(title="ETHGlobal New York 2026", url="https://www.ethglobal.com/events/new-york-2026/?utm_source=abc"),
+    ]
+    result = deduplicate_raw_events(events)
+    assert len(result) == 1
 
 
 # ---------------------------------------------------------------------------
