@@ -82,6 +82,10 @@ export default function Navbar({ lastScrapedAt, onScrapeComplete }) {
     setScanning(true)
     try {
       const result = await triggerScrape()
+      // Browsers often suspend AudioContext while the scrape runs; resume so the chime plays
+      if (ctx?.state === "suspended") {
+        await ctx.resume()
+      }
       playScanCompleteChime(ctx)
 
       const badge = resolveScanBadge(result?.detail)

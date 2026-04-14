@@ -56,10 +56,24 @@ def _migrate_add_missing_columns() -> None:
                 pass  # column already exists
 
 
+def _migrate_postgres_events_location_to_text() -> None:
+    """Widen events.location past VARCHAR(300) — scraped venues can exceed 300 chars."""
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE events ALTER COLUMN location TYPE TEXT"))
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            _logger.debug("events.location migration skipped: %s", exc)
+
+
 def create_tables() -> None:
     from backend.models import Base
     Base.metadata.create_all(bind=engine)
     _migrate_add_missing_columns()
+    _migrate_postgres_events_location_to_text()
 
 
 def get_db():

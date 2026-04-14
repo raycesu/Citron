@@ -28,7 +28,7 @@ class Event(Base):
     url = Column(String(1000), unique=True, index=True, nullable=False)
     summary = Column(Text, default="")
     source = Column(String(100), index=True)
-    location = Column(String(300), default="")
+    location = Column(Text, default="")
     city = Column(String(200), default="")
     country = Column(String(100), index=True, default="")
     province_state = Column(String(100), index=True, default="")

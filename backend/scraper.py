@@ -101,6 +101,33 @@ ANOMALOUS_DROP_THRESHOLD = 0.50
 # full scans.  1 means delete on the first clean miss.
 STALE_MISS_THRESHOLD = 1
 
+# String caps aligned with backend.models.Event (Postgres enforces VARCHAR limits).
+_STR_TITLE = 500
+_STR_URL = 1000
+_STR_SOURCE = 100
+_STR_CITY = 200
+_STR_COUNTRY = 100
+_STR_PROVINCE = 100
+_STR_PRIZE_POOL = 200
+_STR_TAG = 100
+
+
+def _clamp_str(value: Optional[str], max_len: int) -> str:
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if len(s) <= max_len:
+        return s
+    return s[:max_len].rstrip()
+
+
+def _clamp_optional_str(value: Optional[str], max_len: int) -> Optional[str]:
+    if value is None:
+        return None
+    s = _clamp_str(value, max_len)
+    return s or None
+
+
 _last_scrape_at: datetime | None = None
 
 
@@ -322,12 +349,17 @@ def _upsert_event(
     'skip' is returned when a fuzzy-matched canonical row is marked seen but
     no new row is inserted (avoids duplicates with different URLs).
     """
-    existing = db.query(Event).filter(Event.url == raw.url).first()
+    url_db = _clamp_str(raw.url, _STR_URL)
+    title_db = _clamp_str(raw.title, _STR_TITLE)
+    norm = _clamp_str(normalize_title(title_db), _STR_TITLE)
+
+    existing = db.query(Event).filter(Event.url == url_db).first()
 
     if not existing:
         # Normalised-title + city + same calendar-day dedupe
-        norm = normalize_title(raw.title)
         city_lower = (raw.city or "").lower().strip()
+        if len(city_lower) > _STR_CITY:
+            city_lower = city_lower[:_STR_CITY]
         candidate = (
             db.query(Event)
             .filter(
@@ -356,23 +388,31 @@ def _upsert_event(
     else:
         is_inperson = raw.is_inperson
 
-    province_state = cls.get("province_state") or raw.province_state or ""
+    province_state = _clamp_str(
+        cls.get("province_state") or raw.province_state or "", _STR_PROVINCE
+    )
     summary = cls.get("summary") or ""
     grant_details = cls.get("travel_grant_details") or raw.travel_grant_details
     ai_tags: list[str] = cls.get("tags") or []
     merged_tags = list(set(raw.raw_tags + ai_tags))
 
+    country_db = _clamp_str(country, _STR_COUNTRY)
+    location_db = _clamp_str(raw.location, 10_000)
+    city_db = _clamp_str(raw.city, _STR_CITY)
+    source_db = _clamp_str(raw.source, _STR_SOURCE)
+    prize_db = _clamp_optional_str(raw.prize_pool, _STR_PRIZE_POOL)
+
     if existing:
         # Refresh raw fields so dates, locations, descriptions stay current
-        existing.title = raw.title
-        existing.normalized_title = normalize_title(raw.title)
+        existing.title = title_db
+        existing.normalized_title = norm
         existing.description = raw.description or existing.description
-        existing.location = raw.location or existing.location
-        existing.city = raw.city or existing.city
+        existing.location = location_db or existing.location
+        existing.city = city_db or existing.city
         existing.start_date = raw.start_date or existing.start_date
         existing.end_date = raw.end_date or existing.end_date
         existing.deadline = raw.deadline or existing.deadline
-        existing.prize_pool = raw.prize_pool or existing.prize_pool
+        existing.prize_pool = prize_db if raw.prize_pool else existing.prize_pool
         existing.is_online = raw.is_online
         existing.is_inperson = is_inperson
         existing.has_travel_grant = has_grant
@@ -380,7 +420,7 @@ def _upsert_event(
         # Refresh AI fields
         existing.relevance_score = relevance
         existing.priority_score = priority
-        existing.country = country or existing.country
+        existing.country = country_db or existing.country
         existing.province_state = province_state or existing.province_state
         existing.summary = summary or existing.summary
         existing.ai_classified = bool(cls)
@@ -390,20 +430,20 @@ def _upsert_event(
         return "updated", existing.id
 
     event = Event(
-        title=raw.title,
-        normalized_title=normalize_title(raw.title),
+        title=title_db,
+        normalized_title=norm,
         description=raw.description,
-        url=raw.url,
+        url=url_db,
         summary=summary,
-        source=raw.source,
-        location=raw.location,
-        city=raw.city,
-        country=country,
+        source=source_db,
+        location=location_db,
+        city=city_db,
+        country=country_db,
         province_state=province_state,
         start_date=raw.start_date,
         end_date=raw.end_date,
         deadline=raw.deadline,
-        prize_pool=raw.prize_pool,
+        prize_pool=prize_db,
         is_online=raw.is_online,
         is_inperson=is_inperson,
         has_travel_grant=has_grant,
@@ -431,7 +471,7 @@ def _sync_tags(db: Session, event: Event, tag_names: list[str]) -> None:
         synchronize_session=False
     )
     for name in tag_names:
-        name = name.strip()
+        name = _clamp_str(name.strip(), _STR_TAG)
         if not name:
             continue
         tag = db.query(Tag).filter(Tag.name == name).first()
