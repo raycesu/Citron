@@ -34,18 +34,33 @@ function playScanCompleteChime(ctx) {
 /** Returns a short human-readable label + colour for the scan outcome. */
 function resolveScanBadge(detail) {
   if (!detail) return { label: "Scan failed", color: "rgba(220,80,80,0.9)" }
-  const { publish_status, inserted = 0, updated = 0, stale_deleted = 0 } = detail
+  const {
+    publish_status,
+    inserted = 0,
+    stale_deleted = 0,
+    force_full_refresh_accepted = false,
+    force_full_refresh_rejected_reason = null,
+    delete_blocked_reason = null,
+  } = detail
+
   if (publish_status === "full_refresh") {
     const parts = []
     if (inserted > 0) parts.push(`+${inserted}`)
     if (stale_deleted > 0) parts.push(`−${stale_deleted}`)
     const suffix = parts.length ? ` · ${parts.join(" ")}` : ""
-    return { label: `Refreshed${suffix}`, color: "rgba(80,200,120,0.9)" }
+    const forceTag = force_full_refresh_accepted ? " (forced)" : ""
+    return { label: `Refreshed${suffix}${forceTag}`, color: "rgba(80,200,120,0.9)" }
   }
+
   if (publish_status === "additive_only") {
     const suffix = inserted > 0 ? ` · +${inserted}` : ""
+    const reason = force_full_refresh_rejected_reason || delete_blocked_reason || null
+    if (reason) {
+      console.info("[Citron] Scan blocked:", reason)
+    }
     return { label: `Partial scan${suffix}`, color: "rgba(255,190,50,0.9)" }
   }
+
   return { label: "Scan error", color: "rgba(220,80,80,0.9)" }
 }
 
@@ -81,7 +96,7 @@ export default function Navbar({ lastScrapedAt, onScrapeComplete }) {
 
     setScanning(true)
     try {
-      const result = await triggerScrape()
+      const result = await triggerScrape({})
       // Browsers often suspend AudioContext while the scrape runs; resume so the chime plays
       if (ctx?.state === "suspended") {
         await ctx.resume()

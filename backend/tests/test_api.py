@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from backend.database import get_db
 from backend.main import app
@@ -215,3 +215,79 @@ def test_list_tags(client, db):
     names = [t["name"] for t in resp.json()]
     assert "Ethereum" in names
     assert "Solana" in names
+
+
+# ---------------------------------------------------------------------------
+# Scrape endpoint — request contract
+# ---------------------------------------------------------------------------
+
+_PIPELINE_MOCK = "backend.main.run_pipeline"
+
+_FULL_REFRESH_RESULT = {
+    "scraped": 5,
+    "after_filter": 5,
+    "scrapers_failed": 0,
+    "inserted": 5,
+    "updated": 0,
+    "stale_deleted": 0,
+    "orphan_tags_removed": 0,
+    "publish_status": "full_refresh",
+    "delete_blocked_reason": None,
+    "force_full_refresh_accepted": False,
+    "force_full_refresh_rejected_reason": None,
+    "elapsed_seconds": 1.0,
+    "scraped_at": datetime.now(timezone.utc).isoformat(),
+    "gemini_rate_limited": False,
+    "current_stats": {
+        "total_events": 5,
+        "travel_grants": 0,
+        "in_person_events": 5,
+        "canada_us_events": 5,
+        "events_next_7_days": 0,
+    },
+}
+
+
+def test_scrape_default_payload(client):
+    """POST /api/scrape with empty body calls run_pipeline with no force flag."""
+    with patch(_PIPELINE_MOCK, new=AsyncMock(return_value=_FULL_REFRESH_RESULT)) as mock:
+        resp = client.post("/api/scrape", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["detail"]["publish_status"] == "full_refresh"
+    mock.assert_awaited_once_with(layers=None, force_full_refresh=False)
+
+
+def test_scrape_with_force_full_refresh(client):
+    """POST /api/scrape with force_full_refresh=true passes flag to pipeline."""
+    forced_result = {**_FULL_REFRESH_RESULT, "force_full_refresh_accepted": True}
+    with patch(_PIPELINE_MOCK, new=AsyncMock(return_value=forced_result)) as mock:
+        resp = client.post("/api/scrape", json={"force_full_refresh": True})
+    assert resp.status_code == 200
+    assert resp.json()["detail"]["force_full_refresh_accepted"] is True
+    mock.assert_awaited_once_with(layers=None, force_full_refresh=True)
+
+
+def test_scrape_with_layers(client):
+    """POST /api/scrape with layers list passes them to pipeline."""
+    with patch(_PIPELINE_MOCK, new=AsyncMock(return_value=_FULL_REFRESH_RESULT)) as mock:
+        resp = client.post("/api/scrape", json={"layers": ["major"]})
+    assert resp.status_code == 200
+    mock.assert_awaited_once_with(layers=["major"], force_full_refresh=False)
+
+
+def test_scrape_additive_only_exposes_reason(client):
+    """Additive-only result must surface delete_blocked_reason in response detail."""
+    blocked_result = {
+        **_FULL_REFRESH_RESULT,
+        "publish_status": "additive_only",
+        "delete_blocked_reason": "candidate count (2) is below 50% of existing (10)",
+        "stale_deleted": 0,
+    }
+    with patch(_PIPELINE_MOCK, new=AsyncMock(return_value=blocked_result)):
+        resp = client.post("/api/scrape", json={})
+    assert resp.status_code == 200
+    detail = resp.json()["detail"]
+    assert detail["publish_status"] == "additive_only"
+    assert detail["delete_blocked_reason"] is not None

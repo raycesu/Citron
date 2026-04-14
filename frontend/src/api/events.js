@@ -64,10 +64,13 @@ export function fetchTags() {
   return apiFetch("/tags")
 }
 
-export function triggerScrape(layers = null) {
+export function triggerScrape({ layers = null, forceFullRefresh = false } = {}) {
+  const body = {}
+  if (layers) body.layers = layers
+  if (forceFullRefresh) body.force_full_refresh = true
   return apiFetch("/scrape", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: layers ? JSON.stringify(layers) : "null",
+    body: JSON.stringify(body),
   })
 }

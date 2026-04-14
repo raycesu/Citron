@@ -471,3 +471,126 @@ def test_stale_detection_scoped_to_scraped_sources(db):
     luma_row = db.query(Event).filter(Event.url == "https://luma-event.com").first()
     assert luma_row is not None
     assert luma_row.consecutive_misses == 0
+
+
+# ---------------------------------------------------------------------------
+# 10. force_full_refresh bypasses anomalous-drop when candidates >= min floor
+# ---------------------------------------------------------------------------
+
+
+def test_force_full_refresh_bypasses_drop_threshold(db):
+    """
+    force_full_refresh=True with a small-but-non-zero candidate set should
+    unlock full_refresh status and allow stale deletions even when candidate
+    count is below ANOMALOUS_DROP_THRESHOLD.
+    """
+    for i in range(10):
+        _add_event(db, f"https://old-{i}.com", source="devpost")
+
+    # Only 2 events survive the harsher filter — normally triggers additive_only
+    new_events = [_raw(f"https://fresh-{i}.com") for i in range(2)]
+    pairs = [_default_cls(e) for e in new_events]
+
+    import backend.scraper as scraper_mod
+
+    original_threshold = scraper_mod.ANOMALOUS_DROP_THRESHOLD
+    original_min = scraper_mod.FULL_REFRESH_MIN_CANDIDATES
+    try:
+        scraper_mod.ANOMALOUS_DROP_THRESHOLD = 0.50  # default
+        scraper_mod.FULL_REFRESH_MIN_CANDIDATES = 1   # floor: at least 1
+
+        with (
+            patch(_PATCHES["scrapers"], new=AsyncMock(return_value=(new_events, 0, {"devpost"}))),
+            patch(_PATCHES["ai"], new=AsyncMock(return_value=_cls_result(pairs))),
+            patch(_PATCHES["db"], _test_db_context),
+        ):
+            from backend.scraper import run_pipeline
+
+            result = _run(run_pipeline(force_full_refresh=True))
+    finally:
+        scraper_mod.ANOMALOUS_DROP_THRESHOLD = original_threshold
+        scraper_mod.FULL_REFRESH_MIN_CANDIDATES = original_min
+
+    assert result["publish_status"] == "full_refresh"
+    assert result["force_full_refresh_accepted"] is True
+    assert result["stale_deleted"] == 10
+
+    db.expire_all()
+    assert db.query(Event).count() == 2
+
+
+# ---------------------------------------------------------------------------
+# 11. force_full_refresh with candidates below min floor is still blocked
+# ---------------------------------------------------------------------------
+
+
+def test_force_full_refresh_blocked_below_min_candidates(db):
+    """
+    force_full_refresh=True must still be blocked when candidate count is below
+    FULL_REFRESH_MIN_CANDIDATES to prevent wiping the DB on an empty scrape.
+    """
+    for i in range(10):
+        _add_event(db, f"https://protected-{i}.com", source="devpost")
+
+    # Scrape returns 0 events — even force should not delete anything
+    empty: list = []
+    pairs: list = []
+
+    import backend.scraper as scraper_mod
+
+    original_min = scraper_mod.FULL_REFRESH_MIN_CANDIDATES
+    try:
+        scraper_mod.FULL_REFRESH_MIN_CANDIDATES = 1
+
+        with (
+            patch(_PATCHES["scrapers"], new=AsyncMock(return_value=(empty, 0, {"devpost"}))),
+            patch(_PATCHES["ai"], new=AsyncMock(return_value=_cls_result(pairs))),
+            patch(_PATCHES["db"], _test_db_context),
+        ):
+            from backend.scraper import run_pipeline
+
+            result = _run(run_pipeline(force_full_refresh=True))
+    finally:
+        scraper_mod.FULL_REFRESH_MIN_CANDIDATES = original_min
+
+    assert result["publish_status"] == "additive_only"
+    assert result["force_full_refresh_accepted"] is False
+    assert result["force_full_refresh_rejected_reason"] is not None
+    assert result["stale_deleted"] == 0
+
+    db.expire_all()
+    assert db.query(Event).count() == 10
+
+
+# ---------------------------------------------------------------------------
+# 12. force_full_refresh with scraper failures is still blocked
+# ---------------------------------------------------------------------------
+
+
+def test_force_full_refresh_blocked_on_scraper_failure(db):
+    """
+    force_full_refresh=True must not override scraper-failure safety: a failed
+    scraper means the candidate set is incomplete and deletes must be blocked.
+    """
+    for i in range(10):
+        _add_event(db, f"https://safe-{i}.com", source="devpost")
+
+    new_events = [_raw(f"https://new-{i}.com") for i in range(2)]
+    pairs = [_default_cls(e) for e in new_events]
+
+    with (
+        # failed_count=1 simulates one scraper erroring
+        patch(_PATCHES["scrapers"], new=AsyncMock(return_value=(new_events, 1, {"devpost"}))),
+        patch(_PATCHES["ai"], new=AsyncMock(return_value=_cls_result(pairs))),
+        patch(_PATCHES["db"], _test_db_context),
+    ):
+        from backend.scraper import run_pipeline
+
+        result = _run(run_pipeline(force_full_refresh=True))
+
+    assert result["publish_status"] == "additive_only"
+    assert result["force_full_refresh_accepted"] is False
+    assert result["stale_deleted"] == 0
+
+    db.expire_all()
+    assert db.query(Event).count() == 12  # 10 original + 2 inserted

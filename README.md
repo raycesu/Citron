@@ -339,6 +339,82 @@ You can trigger a manual scrape at any time with the **Scan Now** button or via 
 | `GEMINI_MODEL` | `gemini-2.5-flash-lite` | Gemini model to use |
 | `DATABASE_URL` | `sqlite:///./citron.db` | SQLAlchemy database URL |
 | `BRAVE_SEARCH_API_KEY` | _(empty)_ | Optional but recommended for Layer 3. Brave bills web search at **$5 per 1,000 requests** and applies **$5 in free credits each month** (~1,000 web searches). Citron issues **17** Brave requests per discovery run (`MAX_QUERIES` in `search_discovery.py`). Total Brave usage now depends entirely on how often you manually trigger `POST /api/scrape` or use **Scan Now**. Without a key, DuckDuckGo fallback is unreliable for bots. |
+| `ANOMALOUS_DROP_THRESHOLD` | `0.50` | Safety gate: fraction of existing DB rows the new candidate set must reach before destructive deletes are allowed. Lower only for deliberate migration passes; restore to `0.50` afterwards. |
+| `STALE_MISS_THRESHOLD` | `1` | Consecutive healthy full-scan misses before a missing event is deleted. |
+| `FULL_REFRESH_MIN_CANDIDATES` | `1` | Absolute floor for `force_full_refresh`: deletes are blocked if the candidate count is below this number regardless of other flags (prevents wiping on an empty scrape). |
+
+---
+
+## Recovering from Additive-Only Lock (Full-Refresh Migration Runbook)
+
+If the deterministic filter (`backend/filtering.py`) was made stricter and the database already contains many events from previous looser scans, the safety gate in `run_pipeline` will keep every subsequent scan in `additive_only` mode because the new candidate set is smaller than 50% of the existing rows.
+
+### Why this happens
+
+```
+publish_status = "additive_only"
+delete_blocked_reason = "candidate count (N) is below 50% of existing (M)"
+```
+
+### Recommended approach: one-time forced scan
+
+This approach preserves the DB until the deliberate migration pass and then cleans it up in a single controlled run.
+
+**Step 1 — Deploy the current code** (if you haven't already).
+
+**Step 2 — On Vercel, add a temporary environment variable:**
+
+In Vercel → Project → Settings → Environment Variables, add for the **Production** environment only:
+
+```
+FULL_REFRESH_MIN_CANDIDATES = 1   ← already the default, leave unless you changed it
+```
+
+No `ANOMALOUS_DROP_THRESHOLD` change is needed — the `force_full_refresh` API flag bypasses the threshold in code.
+
+**Step 3 — Trigger one forced scan** via curl (from your terminal):
+
+```bash
+curl -X POST https://your-vercel-app.vercel.app/api/scrape \
+  -H "Content-Type: application/json" \
+  -d '{"force_full_refresh": true}'
+```
+
+Check the JSON response:
+
+```json
+{
+  "status": "ok",
+  "detail": {
+    "publish_status": "full_refresh",
+    "force_full_refresh_accepted": true,
+    "stale_deleted": 42,
+    "inserted": 5,
+    ...
+  }
+}
+```
+
+- `publish_status: "full_refresh"` — deletes were unlocked.
+- `force_full_refresh_accepted: true` — the override was used.
+- `stale_deleted` — events that no longer pass the filter and were cleaned up.
+
+If you see `force_full_refresh_rejected_reason` in the response, the safety floor was hit (empty scrape). Re-run — it may be a transient scraper issue.
+
+**Step 4 — Verify the result** in the Citron UI. Click Scan Now (normal mode, no force) and confirm the badge shows "Refreshed" or "Partial scan" depending on your new threshold. The forced run is a one-off; subsequent normal scans use the standard 50% gate.
+
+**Step 5 — No cleanup needed.** There is nothing to revert: the `force_full_refresh` flag must be explicitly sent in each API call body and defaults to `false`. Normal Scan Now clicks in the UI never set it.
+
+### Tuning the threshold permanently (alternative)
+
+If your filter will permanently yield fewer results than before, lower the threshold to match the new steady-state rather than using force mode every time:
+
+In Vercel → Environment Variables:
+```
+ANOMALOUS_DROP_THRESHOLD = 0.20   ← example: require only 20% overlap
+```
+
+Redeploy (or let Vercel pick it up on the next serverless cold start). Now normal scans will pass the gate without needing `force_full_refresh`.
 
 ### Before you push to GitHub
 

@@ -7,9 +7,19 @@ Flow:
 Each full scan builds a complete candidate set and atomically reconciles the
 database against it.  Destructive deletes are gated behind safety checks so a
 partial or anomalous scrape never wipes valid data.
+
+Runtime gate overrides (env vars with safe defaults):
+  ANOMALOUS_DROP_THRESHOLD  – fraction of existing rows the candidate set must
+                               reach before deletes are allowed (default 0.50).
+  STALE_MISS_THRESHOLD      – consecutive full-scan misses before a row is
+                               deleted (default 1).
+  FULL_REFRESH_MIN_CANDIDATES – absolute floor; force_full_refresh is still
+                               blocked when candidates fall below this number
+                               (default 1, prevents wiping on an empty scrape).
 """
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -93,13 +103,37 @@ MAJOR_SCRAPERS = [DevpostScraper, ETHGlobalScraper]
 MINOR_SCRAPERS = [LumaScraper]
 SEARCH_SCRAPERS = [SearchDiscoveryScraper]
 
-# Block destructive deletes when the candidate count falls below this fraction
-# of the existing row count for the same sources.
-ANOMALOUS_DROP_THRESHOLD = 0.50
+# ---------------------------------------------------------------------------
+# Safety-gate thresholds — configurable via environment variables.
+# Defaults preserve the original conservative behaviour; override only when
+# you need a one-time controlled migration (e.g. after tightening the filter).
+# ---------------------------------------------------------------------------
 
-# Delete a DB row after it has been absent from this many consecutive healthy
-# full scans.  1 means delete on the first clean miss.
-STALE_MISS_THRESHOLD = 1
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# Fraction of existing rows the candidate set must reach before deletes are
+# allowed.  Set ANOMALOUS_DROP_THRESHOLD=0.0 to bypass on a migration pass.
+ANOMALOUS_DROP_THRESHOLD: float = _float_env("ANOMALOUS_DROP_THRESHOLD", 0.50)
+
+# Consecutive full-scan misses before a row is deleted.
+STALE_MISS_THRESHOLD: int = _int_env("STALE_MISS_THRESHOLD", 1)
+
+# Absolute floor for force_full_refresh: even with force enabled, the pipeline
+# will not delete rows when the candidate set is smaller than this number.
+# This prevents an accidental empty-scrape from wiping the whole database.
+FULL_REFRESH_MIN_CANDIDATES: int = _int_env("FULL_REFRESH_MIN_CANDIDATES", 1)
 
 # String caps aligned with backend.models.Event (Postgres enforces VARCHAR limits).
 _STR_TITLE = 500
@@ -172,7 +206,10 @@ async def run_scrapers(
     return raw, failed_count, scraped_sources
 
 
-async def run_pipeline(layers: list[str] | None = None) -> dict:
+async def run_pipeline(
+    layers: list[str] | None = None,
+    force_full_refresh: bool = False,
+) -> dict:
     """
     Full ingestion cycle using snapshot + reconcile.
 
@@ -180,6 +217,12 @@ async def run_pipeline(layers: list[str] | None = None) -> dict:
     upserted.  Events absent from this scan (within the scraped sources) have
     their consecutive_misses counter incremented; they are deleted only when the
     scan passes both safety gates (no scraper failures, no anomalous count drop).
+
+    force_full_refresh: when True, bypass the anomalous-drop threshold and treat
+        the scan as a full refresh *provided* scrapers all succeed and the
+        candidate count is >= FULL_REFRESH_MIN_CANDIDATES.  Intended for one-off
+        migration passes after intentional filter changes.  Scraper failures and
+        an empty candidate set still block deletes regardless of this flag.
     """
     global _last_scrape_at
 
@@ -238,16 +281,42 @@ async def run_pipeline(layers: list[str] | None = None) -> dict:
             existing_count == 0
             or len(filtered) >= existing_count * ANOMALOUS_DROP_THRESHOLD
         )
+        above_min = len(filtered) >= FULL_REFRESH_MIN_CANDIDATES
+
+        force_accepted = False
+        force_rejected_reason: Optional[str] = None
 
         if not scrape_healthy:
             publish_status = "additive_only"
             delete_blocked_reason = f"{failed_scraper_count} scraper(s) failed"
+            if force_full_refresh:
+                force_rejected_reason = "force_full_refresh ignored: scraper failures present"
         elif not drop_ok:
-            publish_status = "additive_only"
-            delete_blocked_reason = (
-                f"candidate count ({len(filtered)}) is below "
-                f"{int(ANOMALOUS_DROP_THRESHOLD * 100)}% of existing ({existing_count})"
-            )
+            if force_full_refresh and above_min:
+                # Intentional override — bypass threshold but keep scraper and
+                # min-candidate guards.
+                publish_status = "full_refresh"
+                force_accepted = True
+                logger.warning(
+                    f"force_full_refresh accepted: bypassing anomalous-drop gate "
+                    f"(candidates={len(filtered)}, existing={existing_count})"
+                )
+            elif force_full_refresh and not above_min:
+                publish_status = "additive_only"
+                delete_blocked_reason = (
+                    f"candidate count ({len(filtered)}) is below "
+                    f"{int(ANOMALOUS_DROP_THRESHOLD * 100)}% of existing ({existing_count})"
+                )
+                force_rejected_reason = (
+                    f"force_full_refresh ignored: candidate count ({len(filtered)}) "
+                    f"< FULL_REFRESH_MIN_CANDIDATES ({FULL_REFRESH_MIN_CANDIDATES})"
+                )
+            else:
+                publish_status = "additive_only"
+                delete_blocked_reason = (
+                    f"candidate count ({len(filtered)}) is below "
+                    f"{int(ANOMALOUS_DROP_THRESHOLD * 100)}% of existing ({existing_count})"
+                )
 
         can_delete = publish_status == "full_refresh"
 
@@ -328,6 +397,8 @@ async def run_pipeline(layers: list[str] | None = None) -> dict:
         "orphan_tags_removed": orphan_tags_removed,
         "publish_status": publish_status,
         "delete_blocked_reason": delete_blocked_reason,
+        "force_full_refresh_accepted": force_accepted,
+        "force_full_refresh_rejected_reason": force_rejected_reason,
         "elapsed_seconds": round(elapsed, 1),
         "scraped_at": _last_scrape_at.isoformat(),
         "gemini_rate_limited": gemini_rate_limit_active_for_quota_day(),

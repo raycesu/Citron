@@ -101,6 +101,11 @@ class StatsOut(BaseModel):
     gemini_rate_limited_today: bool = False
 
 
+class ScrapeRequest(BaseModel):
+    layers: Optional[list[str]] = None
+    force_full_refresh: bool = False
+
+
 class ScrapeResult(BaseModel):
     status: str
     # publish_status: "full_refresh" | "additive_only"
@@ -198,10 +203,28 @@ def get_stats(db: Session = Depends(get_db)):
 
 
 @app.post("/api/scrape", response_model=ScrapeResult)
-async def trigger_scrape(layers: Optional[list[str]] = None):
-    """Manually trigger a scrape cycle. Optionally specify layers."""
+async def trigger_scrape(body: ScrapeRequest = ScrapeRequest()):
+    """
+    Manually trigger a scrape cycle.
+
+    Accepts an optional JSON body:
+      {
+        "layers": ["major", "minor", "search"],   // omit for all layers
+        "force_full_refresh": false               // set true for a one-time
+                                                  // migration pass when the
+                                                  // deterministic filter was
+                                                  // deliberately tightened
+      }
+
+    force_full_refresh bypasses the anomalous-drop threshold but is still
+    blocked if any scrapers fail or the candidate count is below
+    FULL_REFRESH_MIN_CANDIDATES (env var, default 1).
+    """
     try:
-        result = await run_pipeline(layers=layers)
+        result = await run_pipeline(
+            layers=body.layers,
+            force_full_refresh=body.force_full_refresh,
+        )
         return ScrapeResult(status="ok", detail=result)
     except Exception as exc:
         logger.error(f"Manual scrape failed: {exc}", exc_info=True)
