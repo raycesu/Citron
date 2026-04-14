@@ -20,6 +20,7 @@ Runtime gate overrides (env vars with safe defaults):
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -39,6 +40,7 @@ from backend.filtering import (
 )
 from backend.models import Event, EventTag, Tag
 from backend.scrapers.devpost import DevpostScraper
+from backend.scrapers.devpost import _infer_country_province
 from backend.scrapers.ethglobal import ETHGlobalScraper
 from backend.scrapers.luma import LumaScraper
 from backend.scrapers.search_discovery import SearchDiscoveryScraper
@@ -173,6 +175,191 @@ def _clamp_optional_str(value: Optional[str], max_len: int) -> Optional[str]:
         return None
     s = _clamp_str(value, max_len)
     return s or None
+
+
+_UNKNOWN_LOCATION_RE = re.compile(
+    r"\b(tbd|to be decided|unknown|n/?a|not announced|coming soon)\b",
+    re.IGNORECASE,
+)
+_VIRTUAL_LOCATION_RE = re.compile(
+    r"\b(online|virtual|remote)\b",
+    re.IGNORECASE,
+)
+_MONTH_DAY_RANGE_RE = re.compile(
+    r"\b("
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+    r")\s+(\d{1,2})(?:st|nd|rd|th)?\s*[-–]\s*(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(20\d{2}))?\b",
+    re.IGNORECASE,
+)
+_MONTH_DAY_SINGLE_RE = re.compile(
+    r"\b("
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+    r")\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(20\d{2}))?\b",
+    re.IGNORECASE,
+)
+_LOCATION_PHRASE_RE = re.compile(
+    r"\b(?:hosted|happening|taking place|held)\s+in\s+([A-Z][A-Za-z.\- ]{1,80})\b"
+)
+_CITY_HINTS = (
+    "Toronto",
+    "Vancouver",
+    "Montreal",
+    "Ottawa",
+    "Calgary",
+    "Edmonton",
+    "Waterloo",
+    "New York",
+    "San Francisco",
+    "Boston",
+    "Chicago",
+    "Seattle",
+    "Los Angeles",
+    "Austin",
+)
+_CITY_HINT_RES = tuple(
+    re.compile(rf"\b{re.escape(city)}\b", re.IGNORECASE) for city in _CITY_HINTS
+)
+
+
+def _parse_month_day(month: str, day: int, year: int) -> Optional[datetime]:
+    month_abbrev = month[:3].title()
+    try:
+        return datetime.strptime(f"{month_abbrev} {day} {year}", "%b %d %Y")
+    except ValueError:
+        return None
+
+
+def _is_vague_location(location: str, city: str, country: str) -> bool:
+    location_text = (location or "").strip()
+    city_text = (city or "").strip()
+    country_text = (country or "").strip()
+
+    if not location_text and not city_text:
+        return True
+    if _UNKNOWN_LOCATION_RE.search(location_text):
+        return True
+    if country_text and location_text.lower() == country_text.lower():
+        return True
+    if location_text.lower() in {"other", "unknown"}:
+        return True
+    return False
+
+
+def _extract_date_from_description(
+    description: str,
+    current_start: Optional[datetime],
+    current_end: Optional[datetime],
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    if current_start and current_end:
+        return current_start, current_end
+
+    text = (description or "").strip()
+    if not text:
+        return current_start, current_end
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    default_year = now.year
+
+    range_match = _MONTH_DAY_RANGE_RE.search(text)
+    if range_match:
+        month, start_day, end_day, year = range_match.groups()
+        parsed_year = int(year) if year else default_year
+        parsed_start = _parse_month_day(month, int(start_day), parsed_year)
+        parsed_end = _parse_month_day(month, int(end_day), parsed_year)
+        if parsed_start and parsed_end:
+            start_value = current_start or parsed_start
+            end_value = current_end or parsed_end
+            return start_value, end_value
+
+    if current_start:
+        return current_start, current_end
+
+    single_match = _MONTH_DAY_SINGLE_RE.search(text)
+    if not single_match:
+        return current_start, current_end
+
+    month, day, year = single_match.groups()
+    parsed_year = int(year) if year else default_year
+    parsed_start = _parse_month_day(month, int(day), parsed_year)
+    if not parsed_start:
+        return current_start, current_end
+    return parsed_start, current_end
+
+
+def _extract_location_from_description(
+    description: str,
+    current_location: str,
+    current_city: str,
+    current_country: str,
+) -> tuple[str, str, str, bool]:
+    location_value = current_location or ""
+    city_value = current_city or ""
+    country_value = current_country or ""
+
+    text = (description or "").strip()
+    if not text:
+        return location_value, city_value, country_value, False
+    if _VIRTUAL_LOCATION_RE.search(text):
+        return location_value, city_value, country_value, False
+    if not _is_vague_location(location_value, city_value, country_value):
+        return location_value, city_value, country_value, False
+
+    candidate_city = ""
+    for city_re, city_name in zip(_CITY_HINT_RES, _CITY_HINTS):
+        if city_re.search(text):
+            candidate_city = city_name
+            break
+
+    if not candidate_city:
+        phrase_match = _LOCATION_PHRASE_RE.search(text)
+        if phrase_match:
+            phrase = phrase_match.group(1).strip(" .,")
+            if 2 <= len(phrase) <= 80 and not _UNKNOWN_LOCATION_RE.search(phrase):
+                candidate_city = phrase
+
+    if not candidate_city:
+        return location_value, city_value, country_value, False
+
+    inferred_country, inferred_province = _infer_country_province(candidate_city)
+    candidate_location = candidate_city
+    updated_country = country_value
+    if inferred_country in {"Canada", "USA", "Online"}:
+        updated_country = inferred_country
+    if inferred_province and inferred_province.lower() not in candidate_location.lower():
+        candidate_location = f"{candidate_location}, {inferred_province}"
+
+    return candidate_location, candidate_city, updated_country, True
+
+
+def _normalize_event_date_location(raw: RawEvent) -> tuple[RawEvent, bool]:
+    normalized = RawEvent(**vars(raw))
+    changed = False
+
+    start_date, end_date = _extract_date_from_description(
+        normalized.description,
+        normalized.start_date,
+        normalized.end_date,
+    )
+    if start_date != normalized.start_date or end_date != normalized.end_date:
+        normalized.start_date = start_date
+        normalized.end_date = end_date
+        changed = True
+
+    location, city, country, location_changed = _extract_location_from_description(
+        normalized.description,
+        normalized.location,
+        normalized.city,
+        normalized.country,
+    )
+    if location_changed:
+        normalized.location = location
+        normalized.city = city
+        normalized.country = country
+        changed = True
+
+    return normalized, changed
 
 
 _last_scrape_at: datetime | None = None
@@ -433,16 +620,17 @@ def _upsert_event(
     'skip' is returned when a fuzzy-matched canonical row is marked seen but
     no new row is inserted (avoids duplicates with different URLs).
     """
-    raw.url = canonicalize_event_url(raw.url)
-    url_db = _clamp_str(raw.url, _STR_URL)
-    title_db = _clamp_str(raw.title, _STR_TITLE)
+    normalized_raw, _ = _normalize_event_date_location(raw)
+    normalized_raw.url = canonicalize_event_url(normalized_raw.url)
+    url_db = _clamp_str(normalized_raw.url, _STR_URL)
+    title_db = _clamp_str(normalized_raw.title, _STR_TITLE)
     norm = _clamp_str(normalize_title(title_db), _STR_TITLE)
 
     existing = db.query(Event).filter(Event.url == url_db).first()
 
     if not existing:
         # Normalised-title + city + same calendar-day dedupe
-        city_lower = (raw.city or "").lower().strip()
+        city_lower = (normalized_raw.city or "").lower().strip()
         if len(city_lower) > _STR_CITY:
             city_lower = city_lower[:_STR_CITY]
         candidate = (
@@ -453,37 +641,37 @@ def _upsert_event(
             )
             .first()
         )
-        if candidate and candidate.start_date and raw.start_date:
-            if candidate.start_date.date() == raw.start_date.date():
+        if candidate and candidate.start_date and normalized_raw.start_date:
+            if candidate.start_date.date() == normalized_raw.start_date.date():
                 # Treat fuzzy duplicate as the canonical row and refresh it below.
                 existing = candidate
 
     # Compute derived fields
     relevance = float(cls.get("relevance_score") or 0)
     priority = float(cls.get("priority_score") or 0)
-    has_grant = bool(cls.get("has_travel_grant", raw.has_travel_grant))
-    country = _merge_event_country(raw, cls) or ""
+    has_grant = bool(cls.get("has_travel_grant", normalized_raw.has_travel_grant))
+    country = _merge_event_country(normalized_raw, cls) or ""
 
     if cls.get("is_inperson") is not None:
         is_inperson = bool(cls["is_inperson"])
-    elif country == "Online" or raw.is_online:
+    elif country == "Online" or normalized_raw.is_online:
         is_inperson = False
     else:
-        is_inperson = raw.is_inperson
+        is_inperson = normalized_raw.is_inperson
 
     province_state = _clamp_str(
-        cls.get("province_state") or raw.province_state or "", _STR_PROVINCE
+        cls.get("province_state") or normalized_raw.province_state or "", _STR_PROVINCE
     )
     summary = cls.get("summary") or ""
-    grant_details = cls.get("travel_grant_details") or raw.travel_grant_details
+    grant_details = cls.get("travel_grant_details") or normalized_raw.travel_grant_details
     ai_tags: list[str] = cls.get("tags") or []
-    merged_tags = list(set(raw.raw_tags + ai_tags))
+    merged_tags = list(set(normalized_raw.raw_tags + ai_tags))
 
     country_db = _clamp_str(country, _STR_COUNTRY)
-    location_db = _clamp_str(raw.location, 10_000)
-    city_db = _clamp_str(raw.city, _STR_CITY)
-    source_db = _clamp_str(raw.source, _STR_SOURCE)
-    prize_db = _clamp_optional_str(raw.prize_pool, _STR_PRIZE_POOL)
+    location_db = _clamp_str(normalized_raw.location, 10_000)
+    city_db = _clamp_str(normalized_raw.city, _STR_CITY)
+    source_db = _clamp_str(normalized_raw.source, _STR_SOURCE)
+    prize_db = _clamp_optional_str(normalized_raw.prize_pool, _STR_PRIZE_POOL)
 
     if existing:
         incoming_rank = _source_rank(raw.source)
@@ -495,16 +683,16 @@ def _upsert_event(
             existing.title = title_db
         existing.normalized_title = norm
         if can_override_with_incoming or not existing.description:
-            existing.description = raw.description or existing.description
+            existing.description = normalized_raw.description or existing.description
         if can_override_with_incoming or not existing.location:
             existing.location = location_db or existing.location
         if can_override_with_incoming or not existing.city:
             existing.city = city_db or existing.city
-        existing.start_date = raw.start_date or existing.start_date
-        existing.end_date = raw.end_date or existing.end_date
-        existing.deadline = raw.deadline or existing.deadline
-        existing.prize_pool = prize_db if raw.prize_pool else existing.prize_pool
-        existing.is_online = raw.is_online
+        existing.start_date = normalized_raw.start_date or existing.start_date
+        existing.end_date = normalized_raw.end_date or existing.end_date
+        existing.deadline = normalized_raw.deadline or existing.deadline
+        existing.prize_pool = prize_db if normalized_raw.prize_pool else existing.prize_pool
+        existing.is_online = normalized_raw.is_online
         existing.is_inperson = is_inperson
         existing.has_travel_grant = has_grant
         existing.travel_grant_details = grant_details or existing.travel_grant_details
@@ -529,7 +717,7 @@ def _upsert_event(
     event = Event(
         title=title_db,
         normalized_title=norm,
-        description=raw.description,
+        description=normalized_raw.description,
         url=url_db,
         summary=summary,
         source=source_db,
@@ -537,11 +725,11 @@ def _upsert_event(
         city=city_db,
         country=country_db,
         province_state=province_state,
-        start_date=raw.start_date,
-        end_date=raw.end_date,
-        deadline=raw.deadline,
+        start_date=normalized_raw.start_date,
+        end_date=normalized_raw.end_date,
+        deadline=normalized_raw.deadline,
         prize_pool=prize_db,
-        is_online=raw.is_online,
+        is_online=normalized_raw.is_online,
         is_inperson=is_inperson,
         has_travel_grant=has_grant,
         travel_grant_details=grant_details,

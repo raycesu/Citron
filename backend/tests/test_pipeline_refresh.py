@@ -170,6 +170,76 @@ def test_merge_event_country_luma_canada_without_province_still_wins_vs_usa():
     assert _merge_event_country(raw, cls) == "Canada"
 
 
+def test_upsert_enriches_missing_date_and_vague_location_from_description(db):
+    from backend.scraper import _upsert_event
+
+    raw = RawEvent(
+        title="Web3 Builders Weekend",
+        url="https://example.com/builders-weekend",
+        source="search_discovery",
+        description=(
+            "Hosted in Montreal and happening on March 27th-28th, 2027. "
+            "Register now for the event."
+        ),
+        location="Canada",
+        country="Canada",
+    )
+    scan_ts = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    status, event_id = _upsert_event(db, raw, {}, scan_ts)
+
+    assert status == "inserted"
+    assert event_id is not None
+
+    row = db.query(Event).filter(Event.id == event_id).first()
+    assert row is not None
+    assert row.city == "Montreal"
+    assert row.location.startswith("Montreal")
+    assert row.start_date is not None
+    assert row.start_date.year == 2027
+    assert row.start_date.month == 3
+    assert row.start_date.day == 27
+    assert row.end_date is not None
+    assert row.end_date.year == 2027
+    assert row.end_date.month == 3
+    assert row.end_date.day == 28
+
+
+def test_upsert_does_not_downgrade_specific_location_or_existing_dates(db):
+    from backend.scraper import _upsert_event
+
+    existing_start = datetime(2027, 3, 10)
+    existing_end = datetime(2027, 3, 12)
+    raw = RawEvent(
+        title="ETH Toronto Summit",
+        url="https://example.com/eth-toronto",
+        source="devpost",
+        description=(
+            "Hosted in Montreal and happening on March 27th-28th, 2027. "
+            "This sentence should not override specific structured fields."
+        ),
+        location="Toronto, Ontario",
+        city="Toronto",
+        country="Canada",
+        province_state="Ontario",
+        start_date=existing_start,
+        end_date=existing_end,
+    )
+    scan_ts = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    status, event_id = _upsert_event(db, raw, {}, scan_ts)
+
+    assert status == "inserted"
+    assert event_id is not None
+
+    row = db.query(Event).filter(Event.id == event_id).first()
+    assert row is not None
+    assert row.city == "Toronto"
+    assert row.location == "Toronto, Ontario"
+    assert row.start_date == existing_start
+    assert row.end_date == existing_end
+
+
 # ---------------------------------------------------------------------------
 # 1. Full successful refresh — inserts new events
 # ---------------------------------------------------------------------------

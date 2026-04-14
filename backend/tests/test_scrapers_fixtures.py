@@ -386,3 +386,73 @@ def test_clean_location_rejects_non_location_boilerplate():
     from backend.scrapers.search_discovery import _clean_location
 
     assert _clean_location("Sign up to our newsletter for updates") == ""
+
+
+def test_normalize_event_date_location_extracts_month_range_from_description():
+    from backend.filtering import RawEvent
+    from backend.scraper import _normalize_event_date_location
+
+    raw = RawEvent(
+        title="Web3 Dev Summit",
+        url="https://example.com/summit",
+        source="search_discovery",
+        description="It is happening on March 27th-28th, 2027 in Toronto.",
+    )
+
+    normalized, changed = _normalize_event_date_location(raw)
+
+    assert changed is True
+    assert normalized.start_date is not None
+    assert normalized.start_date.year == 2027
+    assert normalized.start_date.month == 3
+    assert normalized.start_date.day == 27
+    assert normalized.end_date is not None
+    assert normalized.end_date.year == 2027
+    assert normalized.end_date.month == 3
+    assert normalized.end_date.day == 28
+
+
+def test_normalize_event_date_location_keeps_physical_location_empty_for_virtual_text():
+    from backend.filtering import RawEvent
+    from backend.scraper import _normalize_event_date_location
+
+    raw = RawEvent(
+        title="Virtual Builders Day",
+        url="https://example.com/virtual",
+        source="search_discovery",
+        description="This virtual summit is online and remote for all attendees.",
+        location="",
+        city="",
+        country="Online",
+        is_online=True,
+    )
+
+    normalized, changed = _normalize_event_date_location(raw)
+
+    assert normalized.location == ""
+    assert normalized.city == ""
+    assert normalized.country == "Online"
+    assert changed is False
+
+
+def test_normalize_event_date_location_ignores_noisy_description_without_confident_hints():
+    from backend.filtering import RawEvent
+    from backend.scraper import _normalize_event_date_location
+
+    raw = RawEvent(
+        title="Blockchain Builders",
+        url="https://example.com/builders",
+        source="search_discovery",
+        description="Join us soon. More details to be decided. Stay tuned for updates.",
+        location="",
+        city="",
+        country="",
+    )
+
+    normalized, changed = _normalize_event_date_location(raw)
+
+    assert normalized.start_date is None
+    assert normalized.end_date is None
+    assert normalized.location == ""
+    assert normalized.city == ""
+    assert changed is False
