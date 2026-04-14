@@ -242,6 +242,10 @@ _CHAIN_ADJACENT_RES: tuple[re.Pattern, ...] = tuple(
         r"\bweb3\b",
     )
 )
+_GENERIC_EVENT_CTA_RE: re.Pattern = re.compile(
+    r"\b(register|registration|rsvp|tickets?|sign[\s\-]?up|apply|application)\b",
+    re.IGNORECASE,
+)
 
 TRUSTED_SOURCES: set[str] = {
     # Hackathon / blockchain-native platforms (domain allowlist for helpers/tests).
@@ -420,6 +424,14 @@ def _is_luma_event(event: RawEvent) -> bool:
         return False
 
 
+def _is_linkedin_url(url: str) -> bool:
+    try:
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        return host == "linkedin.com" or host.endswith(".linkedin.com")
+    except Exception:
+        return False
+
+
 def _luma_social_title_blocked(title: str, combined: str) -> bool:
     """
     True if a Luma listing looks like social/lifestyle/founder noise and lacks
@@ -462,6 +474,16 @@ def is_valid_event_title(title: str) -> bool:
     return not any(p.match(stripped) for p in _NON_EVENT_TITLE_PATTERNS)
 
 
+def _has_general_event_context(event: RawEvent, combined: str) -> bool:
+    if not _EVENT_TYPE_ANCHOR_RE.search(combined):
+        return False
+    if event.start_date or event.end_date or event.deadline:
+        return True
+    if (event.location or "").strip():
+        return True
+    return bool(_GENERIC_EVENT_CTA_RE.search(combined))
+
+
 def is_relevant_event(event: RawEvent) -> bool:
     """
     Return True if the event should proceed past deterministic gating.
@@ -479,11 +501,16 @@ def is_relevant_event(event: RawEvent) -> bool:
     """
     if not is_valid_event_title(event.title):
         return False
+    if _is_linkedin_url(event.url):
+        return False
     if not is_valid_luma_url(event.url):
         return False
     combined = f"{event.title} {event.description}"
-    passes_signal = _has_blockchain_signal(combined) or _has_university_blockchain_context(combined)
-    if not passes_signal:
+    has_blockchain_relevance = (
+        _has_blockchain_signal(combined)
+        or _has_university_blockchain_context(combined)
+    )
+    if not has_blockchain_relevance:
         return False
     if _is_luma_event(event) and _luma_social_title_blocked(event.title, combined):
         return False

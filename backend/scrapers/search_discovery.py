@@ -53,7 +53,7 @@ MAX_QUERIES = 17  # covers all queries within daily Brave budget
 
 # Maximum number of discovered URLs to fetch and parse per scan. Keeps runtime
 # predictable; the most relevant URLs tend to appear in early query results.
-MAX_EXTRACT_URLS = 30
+MAX_EXTRACT_URLS = 50
 
 # How many discovered-URL fetches may run concurrently. Bounded to stay polite
 # while still giving a large speedup over the previous serial loop.
@@ -79,6 +79,7 @@ _SEARCH_BLACKLIST_HOSTS = frozenset(
         "youtube.com",
         "wikipedia.org",
         "reddit.com",
+        "linkedin.com",
     }
 )
 
@@ -93,9 +94,77 @@ _NON_EVENT_PATH_TERMS = (
     "/tags/",
     "/categories",
     "/category/",
+    "/blog",
+    "/news",
+    "/article",
+    "/articles",
+    "/press",
+    "/careers",
+    "/jobs",
+    "/job/",
+    "/company",
+    "/about",
+    "/contact",
+    "/docs",
+    "/documentation",
+    "/pricing",
+    "/terms",
+    "/privacy",
 )
 
 _KEEP_QUERY_PARAMS = frozenset({"id", "event", "event_id", "slug"})
+_EVENT_TIME_RE = re.compile(
+    r"\b("
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|"
+    r"dec(?:ember)?|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"\d{1,2}:\d{2}\s?(?:am|pm)?|"
+    r"\d{1,2}\s?(?:am|pm)|"
+    r"\d{4}-\d{2}-\d{2}|"
+    r"\d{1,2}/\d{1,2}(?:/\d{2,4})?"
+    r")\b",
+    re.IGNORECASE,
+)
+_EVENT_LOCATION_RE = re.compile(
+    r"\b("
+    r"venue|location|address|campus|hall|auditorium|center|centre|"
+    r"room|online|in-person|in person|virtual|toronto|vancouver|montreal|"
+    r"new york|san francisco|boston|chicago|seattle|los angeles"
+    r")\b",
+    re.IGNORECASE,
+)
+_EVENT_SIGNUP_RE = re.compile(
+    r"\b("
+    r"register|registration|rsvp|tickets?|sign[\s\-]?up|apply|application|"
+    r"book\s+now|get\s+tickets|join\s+waitlist|reserve\s+spot|claim\s+spot"
+    r")\b",
+    re.IGNORECASE,
+)
+_SIGNUP_HREF_TERMS = ("register", "signup", "rsvp", "ticket", "apply", "waitlist")
+_LOCATION_ATTR_SELECTORS = (
+    '[itemprop="location"]',
+    '[itemprop="addressLocality"]',
+    '[class*="location"]',
+    '[class*="venue"]',
+)
+_LOCATION_HINT_RE = re.compile(
+    r"\b("
+    r"toronto|vancouver|montreal|ottawa|calgary|edmonton|new york|san francisco|boston|"
+    r"chicago|seattle|los angeles|austin|denver|miami|atlanta|washington|"
+    r"online|virtual|in-person|in person|hybrid|"
+    r"venue|hall|center|centre|campus|university|auditorium|hotel|conference"
+    r")\b",
+    re.IGNORECASE,
+)
+_NON_LOCATION_RE = re.compile(
+    r"\b("
+    r"cookie|privacy|terms|login|sign in|sign up|subscribe|newsletter|"
+    r"share|follow|copyright|all rights reserved|contact us|about us|"
+    r"event details|read more|learn more|book now"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def _canonicalize_url(raw_url: str) -> str:
@@ -143,6 +212,8 @@ def _is_non_event_url(raw_url: str) -> bool:
         path = (parsed.path or "").lower().rstrip("/")
         if any(_host_matches(host, blocked) for blocked in _SEARCH_BLACKLIST_HOSTS):
             return True
+        if _host_matches(host, "linkedin.com"):
+            return True
 
         # Generic listing/community pages are noisy and often not a single event.
         if any(term in lowered for term in _NON_EVENT_PATH_TERMS):
@@ -169,9 +240,280 @@ def _clean_location(raw_location: str) -> str:
         return ""
     if cleaned.lower().startswith("skip to content"):
         return ""
+    if re.match(r"^-?\d{1,3}\.\d+\s*,\s*-?\d{1,3}\.\d+$", cleaned):
+        return ""
+    if cleaned.count("|") >= 2:
+        return ""
+    if _NON_LOCATION_RE.search(cleaned):
+        return ""
     if re.search(r"(facebook|twitter|x-twitter|youtube|telegram|linkedin){2,}", cleaned, re.IGNORECASE):
         return ""
     return cleaned
+
+
+def _location_score(location: str) -> int:
+    score = 0
+    lowered = location.lower()
+    if _LOCATION_HINT_RE.search(lowered):
+        score += 3
+    if "," in location:
+        score += 2
+    if 8 <= len(location) <= 100:
+        score += 1
+    if any(token in lowered for token in ("street", "st.", "ave", "road", "blvd", "boulevard")):
+        score += 1
+    return score
+
+
+def _pick_best_location(candidates: list[str]) -> str:
+    best = ""
+    best_score = -1
+    for raw in candidates:
+        cleaned = _clean_location(raw)
+        if not cleaned:
+            continue
+        score = _location_score(cleaned)
+        if score > best_score:
+            best = cleaned
+            best_score = score
+    return best
+
+
+def _normalize_signup_url(page_url: str, raw_url: str) -> str:
+    candidate = (raw_url or "").strip()
+    if not candidate:
+        return ""
+    if candidate.startswith(("mailto:", "tel:", "javascript:", "#")):
+        return ""
+    parsed = urlparse(candidate)
+    if parsed.scheme in {"http", "https"}:
+        return candidate
+    if candidate.startswith("//"):
+        scheme = urlparse(page_url).scheme or "https"
+        return f"{scheme}:{candidate}"
+    page = urlparse(page_url)
+    if not page.netloc:
+        return ""
+    base = f"{page.scheme or 'https'}://{page.netloc}"
+    if candidate.startswith("/"):
+        return f"{base}{candidate}"
+    path = page.path.rsplit("/", 1)[0] if "/" in page.path else ""
+    return f"{base}{path}/{candidate}".replace("//", "/").replace(":/", "://", 1)
+
+
+def _extract_ld_location(obj) -> str:
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, list):
+        for item in obj:
+            candidate = _extract_ld_location(item)
+            if candidate:
+                return candidate
+        return ""
+    if not isinstance(obj, dict):
+        return ""
+    pieces: list[str] = []
+    for key in ("name", "address", "streetAddress", "addressLocality", "addressRegion", "addressCountry"):
+        val = obj.get(key)
+        if isinstance(val, str) and val.strip():
+            pieces.append(val.strip())
+        elif key == "address":
+            nested = _extract_ld_location(val)
+            if nested:
+                pieces.append(nested)
+    return ", ".join(dict.fromkeys(pieces))
+
+
+def _extract_ld_signup_url(obj) -> str:
+    if isinstance(obj, str):
+        return obj.strip()
+    if isinstance(obj, list):
+        for item in obj:
+            candidate = _extract_ld_signup_url(item)
+            if candidate:
+                return candidate
+        return ""
+    if not isinstance(obj, dict):
+        return ""
+    offers = obj.get("offers")
+    if offers:
+        offer_url = _extract_ld_signup_url(offers)
+        if offer_url:
+            return offer_url
+    for key in ("url", "sameAs", "registrationUrl"):
+        val = obj.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
+def _collect_ld_event_details(
+    obj,
+    starts: list[datetime],
+    ends: list[datetime],
+    locations: list[str],
+    signup_urls: list[str],
+) -> None:
+    if isinstance(obj, dict):
+        if _ld_type_matches(obj.get("@type")):
+            sd = _parse_date_value(obj.get("startDate") or obj.get("startTime"))
+            ed = _parse_date_value(obj.get("endDate") or obj.get("endTime"))
+            if sd:
+                starts.append(sd)
+            if ed:
+                ends.append(ed)
+            loc = _extract_ld_location(obj.get("location"))
+            if loc:
+                locations.append(loc)
+            signup = _extract_ld_signup_url(obj)
+            if signup:
+                signup_urls.append(signup)
+        for v in obj.values():
+            _collect_ld_event_details(v, starts, ends, locations, signup_urls)
+    elif isinstance(obj, list):
+        for item in obj:
+            _collect_ld_event_details(item, starts, ends, locations, signup_urls)
+
+
+def _extract_signup_url_from_tree(tree: HTMLParser, page_url: str) -> str:
+    for meta_key in ("event:ticket_url", "event:register_url", "og:url"):
+        content = _meta_content(tree, meta_key)
+        normalized = _normalize_signup_url(page_url, content)
+        if normalized and any(term in normalized.lower() for term in _SIGNUP_HREF_TERMS):
+            return normalized
+
+    for node in tree.css("a[href], button[data-href], form[action]"):
+        raw_target = (
+            node.attributes.get("href")
+            or node.attributes.get("data-href")
+            or node.attributes.get("action")
+            or ""
+        )
+        if not raw_target:
+            continue
+        node_text = (node.text(strip=True) or "").lower()
+        lowered_target = raw_target.lower()
+        if not any(term in lowered_target or term in node_text for term in _SIGNUP_HREF_TERMS):
+            continue
+        normalized = _normalize_signup_url(page_url, raw_target)
+        if normalized:
+            return normalized
+    return ""
+
+
+def extract_event_details_from_tree(tree: HTMLParser, page_url: str) -> tuple[datetime | None, datetime | None, str, str]:
+    """Structured-first extraction of datetime, location, and signup URL."""
+    starts: list[datetime] = []
+    ends: list[datetime] = []
+    locations: list[str] = []
+    signup_urls: list[str] = []
+
+    for script in tree.css('script[type="application/ld+json"]'):
+        raw = script.text()
+        if not raw or not raw.strip():
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        _collect_ld_event_details(data, starts, ends, locations, signup_urls)
+
+    if not starts and not ends:
+        og_s = _parse_date_value(_meta_content(tree, "event:start_time"))
+        og_e = _parse_date_value(_meta_content(tree, "event:end_time"))
+        if og_s:
+            starts.append(og_s)
+        if og_e:
+            ends.append(og_e)
+
+    if not starts and not ends:
+        for node in tree.css('[itemprop="startDate"], [itemprop="endDate"]'):
+            ip = node.attributes.get("itemprop", "")
+            raw = node.attributes.get("datetime") or node.attributes.get("content") or ""
+            dt = _parse_date_value(raw)
+            if not dt:
+                continue
+            if ip == "startDate":
+                starts.append(dt)
+            elif ip == "endDate":
+                ends.append(dt)
+
+    if not starts and not ends:
+        times: list[datetime] = []
+        for tnode in tree.css("time[datetime]"):
+            dt = _parse_date_value(tnode.attributes.get("datetime"))
+            if dt:
+                times.append(dt)
+        if len(times) >= 2:
+            starts.append(min(times))
+            ends.append(max(times))
+        elif len(times) == 1:
+            starts.append(times[0])
+
+    location = _pick_best_location(locations)
+    if not location:
+        location = _pick_best_location(
+            [
+                _meta_content(tree, "event:location"),
+                _meta_content(tree, "og:locality"),
+                _meta_content(tree, "geo.placename"),
+                _meta_content(tree, "event:venue"),
+            ]
+        )
+    if not location:
+        dom_candidates = [node.text(strip=True) for node in tree.css(", ".join(_LOCATION_ATTR_SELECTORS))]
+        location = _pick_best_location(dom_candidates[:8])
+
+    signup_url = ""
+    for raw_signup in signup_urls:
+        normalized = _normalize_signup_url(page_url, raw_signup)
+        if normalized:
+            signup_url = normalized
+            break
+    if not signup_url:
+        signup_url = _extract_signup_url_from_tree(tree, page_url)
+
+    start_date = min(starts) if starts else None
+    end_date = max(ends) if ends else None
+    return start_date, end_date, location, signup_url
+
+
+def _has_event_page_signals(
+    tree: HTMLParser,
+    title: str,
+    description: str,
+    location: str,
+    signup_url: str,
+    start_date: datetime | None,
+    end_date: datetime | None,
+) -> bool:
+    """Accept discovered pages only when at least 2 of 3 event-detail signals exist."""
+    page_text = " ".join(
+        part
+        for part in [
+            title,
+            description,
+            location,
+            _meta_content(tree, "description"),
+            _meta_content(tree, "og:description"),
+            _meta_content(tree, "event:location"),
+            (tree.body.text(separator=" ", strip=True)[:4000] if tree.body else ""),
+        ]
+        if part
+    )
+    lowered = page_text.lower()
+    has_time_signal = bool(start_date or end_date or _EVENT_TIME_RE.search(lowered))
+    has_location_signal = bool(location or _EVENT_LOCATION_RE.search(lowered))
+    has_signup_signal = bool(
+        signup_url
+        or _EVENT_SIGNUP_RE.search(signup_url.lower() if signup_url else "")
+        or _EVENT_SIGNUP_RE.search((tree.body.text(separator=" ", strip=True)[:1200] if tree.body else "").lower())
+        or _EVENT_SIGNUP_RE.search(lowered)
+        or tree.css_first('a[href*="register"], a[href*="signup"], a[href*="rsvp"], a[href*="ticket"]')
+        or tree.css_first('button[class*="register"], button[class*="signup"], button[class*="rsvp"]')
+    )
+    score = int(has_time_signal) + int(has_location_signal) + int(has_signup_signal)
+    return score >= 2
 
 
 def _ld_type_matches(types) -> bool:
@@ -234,56 +576,8 @@ def _meta_content(tree: HTMLParser, prop: str) -> str:
 
 def extract_event_datetimes_from_tree(tree: HTMLParser) -> tuple[datetime | None, datetime | None]:
     """Best-effort event start/end from JSON-LD, Open Graph event tags, microdata, and <time>."""
-    starts: list[datetime] = []
-    ends: list[datetime] = []
-
-    for script in tree.css('script[type="application/ld+json"]'):
-        raw = script.text()
-        if not raw or not raw.strip():
-            continue
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        _collect_ld_event_dates(data, starts, ends)
-
-    if starts or ends:
-        start_d = min(starts) if starts else None
-        end_d = max(ends) if ends else None
-        return start_d, end_d
-
-    og_s = _parse_date_value(_meta_content(tree, "event:start_time"))
-    og_e = _parse_date_value(_meta_content(tree, "event:end_time"))
-    if og_s or og_e:
-        return og_s, og_e
-
-    for node in tree.css('[itemprop="startDate"], [itemprop="endDate"]'):
-        ip = node.attributes.get("itemprop", "")
-        raw = node.attributes.get("datetime") or node.attributes.get("content") or ""
-        dt = _parse_date_value(raw)
-        if not dt:
-            continue
-        if ip == "startDate":
-            starts.append(dt)
-        elif ip == "endDate":
-            ends.append(dt)
-
-    times: list[datetime] = []
-    for tnode in tree.css("time[datetime]"):
-        dt = _parse_date_value(tnode.attributes.get("datetime"))
-        if dt:
-            times.append(dt)
-
-    if starts or ends:
-        start_d = min(starts) if starts else None
-        end_d = max(ends) if ends else None
-        return start_d, end_d
-
-    if len(times) >= 2:
-        return min(times), max(times)
-    if len(times) == 1:
-        return times[0], None
-    return None, None
+    start_d, end_d, _, _ = extract_event_details_from_tree(tree, "")
+    return start_d, end_d
 
 
 class SearchDiscoveryScraper(BaseScraper):
@@ -398,23 +692,19 @@ class SearchDiscoveryScraper(BaseScraper):
             )
             description = desc_node.attributes.get("content", "") if desc_node else ""
 
-            location = ""
-            location_meta = (
-                _meta_content(tree, "event:location")
-                or _meta_content(tree, "og:locality")
-                or _meta_content(tree, "place:location:latitude")
-            )
-            if location_meta:
-                location = location_meta
-            else:
-                location_node = tree.css_first(
-                    '[itemprop="location"], [itemprop="addressLocality"], [class*="location"], [class*="venue"]'
-                )
-                location = location_node.text(strip=True) if location_node else ""
-            location = _clean_location(location)
+            start_date, end_date, location, signup_url = extract_event_details_from_tree(tree, url)
             country, province_state = _infer_country_province(location)
 
-            start_date, end_date = extract_event_datetimes_from_tree(tree)
+            if not _has_event_page_signals(
+                tree=tree,
+                title=title,
+                description=description,
+                location=location,
+                signup_url=signup_url,
+                start_date=start_date,
+                end_date=end_date,
+            ):
+                return None
 
             return RawEvent(
                 title=title[:300],

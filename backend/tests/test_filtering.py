@@ -77,6 +77,35 @@ def test_relevant_in_description():
     assert is_relevant_event(event) is True
 
 
+def test_relevant_blockchain_event_with_general_context():
+    event = RawEvent(
+        title="Blockchain Developer Summit 2026",
+        url="https://example.com/summit",
+        description="Join us and register now for a web3 builder event",
+        start_date=datetime(2026, 10, 2),
+    )
+    assert is_relevant_event(event) is True
+
+
+def test_general_context_without_blockchain_signal_rejected():
+    event = RawEvent(
+        title="Developer Summit 2026",
+        url="https://example.com/summit",
+        description="Join us and register now",
+        start_date=datetime(2026, 10, 2),
+    )
+    assert is_relevant_event(event) is False
+
+
+def test_blockchain_signal_without_general_event_context_still_passes():
+    event = _make(
+        title="Ethereum Ecosystem Update",
+        description="A newsletter digest for web3 builders",
+        url="https://example.com/newsletter",
+    )
+    assert is_relevant_event(event) is True
+
+
 def test_irrelevant_event_rejected():
     event = _make(title="Annual BBQ Contest", description="Grilling, food, prizes")
     assert is_relevant_event(event) is False
@@ -106,6 +135,15 @@ def test_trusted_domain_still_requires_keywords():
 def test_trusted_domain_passes_with_blockchain_keyword():
     event = _make(title="ETHGlobal — L2 Build Day", url="https://ethglobal.com/events/l2-day")
     assert is_relevant_event(event) is True
+
+
+def test_linkedin_url_always_rejected():
+    event = _make(
+        title="Blockchain Meetup Toronto",
+        description="Register for this event",
+        url="https://www.linkedin.com/events/blockchain-meetup-123",
+    )
+    assert is_relevant_event(event) is False
 
 
 # ---------------------------------------------------------------------------

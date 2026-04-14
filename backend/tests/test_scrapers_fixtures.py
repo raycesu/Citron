@@ -233,3 +233,156 @@ def test_search_discovery_rejects_non_event_listing_urls():
 
     assert _is_non_event_url("https://luma.com/calendar") is True
     assert _is_non_event_url("https://eventbrite.com/e/ethglobal-new-york-2026-tickets-123") is False
+
+
+def test_search_discovery_rejects_linkedin_urls():
+    from backend.scrapers.search_discovery import _is_non_event_url
+
+    assert _is_non_event_url("https://www.linkedin.com/events/some-event-123") is True
+    assert _is_non_event_url("https://linkedin.com/company/some-company") is True
+
+
+def test_search_discovery_event_signal_gate_accepts_two_of_three():
+    from datetime import datetime
+
+    from selectolax.parser import HTMLParser
+
+    from backend.scrapers.search_discovery import _has_event_page_signals
+
+    html = """
+    <html>
+      <head>
+        <title>Blockchain Builders Summit</title>
+        <meta name="description" content="Register now for the summit" />
+      </head>
+      <body>
+        <h1>Blockchain Builders Summit</h1>
+        <a href="/register">Register</a>
+      </body>
+    </html>
+    """
+    tree = HTMLParser(html)
+    assert _has_event_page_signals(
+        tree=tree,
+        title="Blockchain Builders Summit",
+        description="Register now for the summit",
+        location="",
+        signup_url="https://example.com/register",
+        start_date=datetime(2027, 6, 12),
+        end_date=None,
+    ) is True
+
+
+def test_search_discovery_event_signal_gate_rejects_one_of_three():
+    from selectolax.parser import HTMLParser
+
+    from backend.scrapers.search_discovery import _has_event_page_signals
+
+    html = """
+    <html>
+      <head>
+        <title>Blockchain Ecosystem Update</title>
+        <meta name="description" content="Read the latest community update" />
+      </head>
+      <body>
+        <h1>Blockchain Ecosystem Update</h1>
+      </body>
+    </html>
+    """
+    tree = HTMLParser(html)
+    assert _has_event_page_signals(
+        tree=tree,
+        title="Blockchain Ecosystem Update",
+        description="Read the latest community update",
+        location="",
+        signup_url="",
+        start_date=None,
+        end_date=None,
+    ) is False
+
+
+def test_extract_event_details_from_json_ld():
+    from backend.scrapers.search_discovery import extract_event_details_from_tree
+    from selectolax.parser import HTMLParser
+
+    html = """
+    <html><head>
+      <script type="application/ld+json">
+      {
+        "@type":"Event",
+        "startDate":"2027-09-10T09:00:00-04:00",
+        "endDate":"2027-09-12T17:00:00-04:00",
+        "location":{"name":"Toronto Congress Centre","address":{"addressLocality":"Toronto","addressRegion":"Ontario","addressCountry":"CA"}},
+        "offers":{"url":"https://example.com/register"}
+      }
+      </script>
+    </head><body></body></html>
+    """
+    tree = HTMLParser(html)
+    start_d, end_d, location, signup_url = extract_event_details_from_tree(tree, "https://example.com/event")
+    assert start_d is not None and start_d.year == 2027
+    assert end_d is not None and end_d.day == 12
+    assert "Toronto Congress Centre" in location
+    assert signup_url == "https://example.com/register"
+
+
+def test_extract_event_details_from_meta_and_dom_fallback():
+    from backend.scrapers.search_discovery import extract_event_details_from_tree
+    from selectolax.parser import HTMLParser
+
+    html = """
+    <html>
+      <head>
+        <meta property="event:start_time" content="2028-03-10T12:00:00Z" />
+        <meta property="event:end_time" content="2028-03-10T18:00:00Z" />
+        <meta property="event:location" content="Vancouver Convention Centre" />
+      </head>
+      <body>
+        <a href="/tickets">Get Tickets</a>
+      </body>
+    </html>
+    """
+    tree = HTMLParser(html)
+    start_d, end_d, location, signup_url = extract_event_details_from_tree(tree, "https://example.org/events/builders")
+    assert start_d is not None and start_d.year == 2028
+    assert end_d is not None and end_d.hour == 18
+    assert location == "Vancouver Convention Centre"
+    assert signup_url == "https://example.org/tickets"
+
+
+def test_extract_event_details_from_dom_only():
+    from backend.scrapers.search_discovery import extract_event_details_from_tree
+    from selectolax.parser import HTMLParser
+
+    html = """
+    <html>
+      <body>
+        <time datetime="2029-06-08T10:00:00-04:00"></time>
+        <div class="venue">Montreal Innovation Hub</div>
+        <button data-href="/register-now">Register</button>
+      </body>
+    </html>
+    """
+    tree = HTMLParser(html)
+    start_d, end_d, location, signup_url = extract_event_details_from_tree(tree, "https://foo.dev/events/mtl")
+    assert start_d is not None and start_d.year == 2029
+    assert end_d is None
+    assert location == "Montreal Innovation Hub"
+    assert signup_url == "https://foo.dev/register-now"
+
+
+def test_pick_best_location_prefers_real_venue_over_noise():
+    from backend.scrapers.search_discovery import _pick_best_location
+
+    candidates = [
+        "Read more about event details",
+        "Toronto, Ontario, Canada",
+        "cookie policy",
+    ]
+    assert _pick_best_location(candidates) == "Toronto, Ontario, Canada"
+
+
+def test_clean_location_rejects_non_location_boilerplate():
+    from backend.scrapers.search_discovery import _clean_location
+
+    assert _clean_location("Sign up to our newsletter for updates") == ""
