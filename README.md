@@ -159,7 +159,7 @@ Citron/
 ### 1. Prerequisites
 
 - Python 3.11+
-- Node.js 18+
+- Node.js 18+ (or newer)
 - A Google Gemini API key (free tier at [aistudio.google.com](https://aistudio.google.com))
 
 ### 2. Configure environment
