@@ -63,7 +63,7 @@ function getFallbackChimeDataUrl() {
     const secondTone =
       time >= 0.08 && time <= 0.28 ? Math.sin(2 * Math.PI * 1046.5 * (time - 0.08)) : 0
     const env = Math.exp(-8 * time)
-    samples[i] = (firstTone * 0.45 + secondTone * 0.35) * env * 0.35
+    samples[i] = (firstTone * 0.45 + secondTone * 0.35) * env * 0.7
   }
 
   fallbackChimeDataUrl = encodeWavDataUrl(samples, sampleRate)
@@ -74,7 +74,7 @@ function playScanCompleteChime(ctx) {
   if (!ctx || ctx.state !== "running") return
   const t0 = ctx.currentTime
   const master = ctx.createGain()
-  master.gain.value = 0.09
+  master.gain.value = 0.22
   master.connect(ctx.destination)
 
   function tone(freqHz, start, durationSec) {
@@ -83,7 +83,7 @@ function playScanCompleteChime(ctx) {
     osc.type = "sine"
     osc.frequency.value = freqHz
     env.gain.setValueAtTime(0.0001, start)
-    env.gain.exponentialRampToValueAtTime(0.2, start + 0.025)
+    env.gain.exponentialRampToValueAtTime(0.35, start + 0.025)
     env.gain.exponentialRampToValueAtTime(0.0001, start + durationSec)
     osc.connect(env)
     env.connect(master)

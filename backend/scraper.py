@@ -584,7 +584,7 @@ async def run_pipeline(
             ).scalar() or 0,
         }
 
-    _last_scrape_at = datetime.now(timezone.utc)
+    _last_scrape_at = datetime.now(timezone.utc).replace(tzinfo=None)
     elapsed = (_last_scrape_at - start).total_seconds()
 
     summary = {
