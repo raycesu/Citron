@@ -1,9 +1,73 @@
 import { useEffect, useRef, useState } from "react"
 import { triggerScrape } from "../api/events"
 
+let fallbackChimeDataUrl = null
+
 function getAudioContext() {
   const Ctx = window.AudioContext || window.webkitAudioContext
   return Ctx ? new Ctx() : null
+}
+
+function encodeWavDataUrl(samples, sampleRate) {
+  const bytesPerSample = 2
+  const blockAlign = bytesPerSample
+  const dataSize = samples.length * bytesPerSample
+  const buffer = new ArrayBuffer(44 + dataSize)
+  const view = new DataView(buffer)
+
+  function writeString(offset, value) {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index))
+    }
+  }
+
+  writeString(0, "RIFF")
+  view.setUint32(4, 36 + dataSize, true)
+  writeString(8, "WAVE")
+  writeString(12, "fmt ")
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * blockAlign, true)
+  view.setUint16(32, blockAlign, true)
+  view.setUint16(34, 16, true)
+  writeString(36, "data")
+  view.setUint32(40, dataSize, true)
+
+  let offset = 44
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[index]))
+    view.setInt16(offset, Math.round(sample * 32767), true)
+    offset += 2
+  }
+
+  const bytes = new Uint8Array(buffer)
+  let binary = ""
+  for (let index = 0; index < bytes.byteLength; index += 1) {
+    binary += String.fromCharCode(bytes[index])
+  }
+  return `data:audio/wav;base64,${window.btoa(binary)}`
+}
+
+function getFallbackChimeDataUrl() {
+  if (fallbackChimeDataUrl) return fallbackChimeDataUrl
+  const sampleRate = 22050
+  const durationSec = 0.3
+  const sampleCount = Math.floor(sampleRate * durationSec)
+  const samples = new Float32Array(sampleCount)
+
+  for (let i = 0; i < sampleCount; i += 1) {
+    const time = i / sampleRate
+    const firstTone = time <= 0.13 ? Math.sin(2 * Math.PI * 784 * time) : 0
+    const secondTone =
+      time >= 0.08 && time <= 0.28 ? Math.sin(2 * Math.PI * 1046.5 * (time - 0.08)) : 0
+    const env = Math.exp(-8 * time)
+    samples[i] = (firstTone * 0.45 + secondTone * 0.35) * env * 0.35
+  }
+
+  fallbackChimeDataUrl = encodeWavDataUrl(samples, sampleRate)
+  return fallbackChimeDataUrl
 }
 
 function playScanCompleteChime(ctx) {
@@ -29,6 +93,55 @@ function playScanCompleteChime(ctx) {
 
   tone(784, t0, 0.11)
   tone(1046.5, t0 + 0.09, 0.16)
+}
+
+async function primeAudioContext(audioCtxRef, isAudioPrimedRef) {
+  if (!audioCtxRef.current) {
+    audioCtxRef.current = getAudioContext()
+  }
+
+  const ctx = audioCtxRef.current
+  if (!ctx) return null
+
+  try {
+    if (ctx.state !== "running") {
+      await ctx.resume()
+    }
+
+    // Tiny silent buffer playback helps "unlock" some browsers after the click gesture
+    if (!isAudioPrimedRef.current && ctx.state === "running") {
+      const silentBuffer = ctx.createBuffer(1, 1, ctx.sampleRate || 22050)
+      const source = ctx.createBufferSource()
+      source.buffer = silentBuffer
+      source.connect(ctx.destination)
+      source.start()
+      isAudioPrimedRef.current = true
+    }
+  } catch (error) {
+    console.warn("[Citron] Unable to prime Web Audio context", error)
+  }
+
+  return ctx
+}
+
+async function playCompletionSound(audioCtxRef, isAudioPrimedRef, fallbackAudioRef) {
+  const ctx = await primeAudioContext(audioCtxRef, isAudioPrimedRef)
+
+  if (ctx?.state === "running") {
+    playScanCompleteChime(ctx)
+    return
+  }
+
+  try {
+    if (!fallbackAudioRef.current) {
+      fallbackAudioRef.current = new Audio(getFallbackChimeDataUrl())
+      fallbackAudioRef.current.preload = "auto"
+    }
+    fallbackAudioRef.current.currentTime = 0
+    await fallbackAudioRef.current.play()
+  } catch (error) {
+    console.warn("[Citron] Unable to play fallback completion sound", error)
+  }
 }
 
 /** Returns a short human-readable label + colour for the scan outcome. */
@@ -69,6 +182,8 @@ export default function Navbar({ lastScrapedAt, onScrapeComplete }) {
   const [btnHovered, setBtnHovered] = useState(false)
   const [scanBadge, setScanBadge] = useState(null)
   const audioCtxRef = useRef(null)
+  const isAudioPrimedRef = useRef(false)
+  const fallbackAudioRef = useRef(null)
   const badgeTimerRef = useRef(null)
 
   // Clear badge when a new scan starts
@@ -76,32 +191,36 @@ export default function Navbar({ lastScrapedAt, onScrapeComplete }) {
     if (scanning) setScanBadge(null)
   }, [scanning])
 
-  const formattedLastScanned = lastScrapedAt
-    ? new Date(lastScrapedAt).toLocaleTimeString("en-CA", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true,
-      })
-    : null
+  useEffect(() => {
+    return () => {
+      if (badgeTimerRef.current) clearTimeout(badgeTimerRef.current)
+      if (audioCtxRef.current?.state !== "closed") {
+        audioCtxRef.current?.close?.().catch(() => {})
+      }
+      fallbackAudioRef.current?.pause?.()
+    }
+  }, [])
+
+  const formattedLastScanned = (() => {
+    if (!lastScrapedAt) return null
+    const scanDate = new Date(lastScrapedAt)
+    if (Number.isNaN(scanDate.getTime())) return null
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+      timeZoneName: "short",
+    }).format(scanDate)
+  })()
 
   async function handleScan() {
     if (scanning) return
-    if (!audioCtxRef.current) {
-      audioCtxRef.current = getAudioContext()
-    }
-    const ctx = audioCtxRef.current
-    if (ctx?.state === "suspended") {
-      await ctx.resume()
-    }
+    await primeAudioContext(audioCtxRef, isAudioPrimedRef)
 
     setScanning(true)
     try {
       const result = await triggerScrape({})
-      // Browsers often suspend AudioContext while the scrape runs; resume so the chime plays
-      if (ctx?.state === "suspended") {
-        await ctx.resume()
-      }
-      playScanCompleteChime(ctx)
+      await playCompletionSound(audioCtxRef, isAudioPrimedRef, fallbackAudioRef)
 
       const badge = resolveScanBadge(result?.detail)
       setScanBadge(badge)
@@ -111,6 +230,7 @@ export default function Navbar({ lastScrapedAt, onScrapeComplete }) {
       if (onScrapeComplete) onScrapeComplete(result?.detail)
     } catch (err) {
       console.error("Scan failed:", err)
+      await playCompletionSound(audioCtxRef, isAudioPrimedRef, fallbackAudioRef)
       setScanBadge(resolveScanBadge(null))
       if (badgeTimerRef.current) clearTimeout(badgeTimerRef.current)
       badgeTimerRef.current = setTimeout(() => setScanBadge(null), 6000)

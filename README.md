@@ -286,7 +286,6 @@ The build command and output directory are declared in `vercel.json`; Vercel rew
 | `BRAVE_SEARCH_API_KEY` | Recommended | Layer 3 scraping; DuckDuckGo fallback is bot-blocked |
 | `DATABASE_URL` | Strongly recommended | Postgres URL (e.g. Neon, Supabase). Without this, Vercel falls back to ephemeral SQLite at `/tmp` — **data is lost on every cold start** |
 | `GEMINI_MODEL` | No | Defaults to `gemini-2.5-flash-lite` |
-| `USER_REGION` | No | Defaults to `Ontario, Canada` |
 
 ### Test locally before deploying
 
