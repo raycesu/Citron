@@ -3,6 +3,7 @@ AI classification layer using Google Gemini (google-genai SDK).
 Events are batched in groups of 20 to minimise API calls.
 Results are cached by event URL to avoid repeat charges.
 """
+import asyncio
 import json
 import logging
 import os
@@ -16,7 +17,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 
 from backend.database import get_db_context
-from backend.filtering import RawEvent
+from backend.filtering import RawEvent, canonicalize_event_url
 from backend.models import AICache
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ SYSTEM_PROMPT = """You rank and classify blockchain and cryptocurrency events fo
 
 Given a list of events, return a JSON array.
 For each event return exactly these fields:
+0. url (string): copy the exact URL from the input event so responses can be matched safely.
 1. relevance_score (integer 1-10): How relevant to blockchain/crypto students and developers (any chain). Score university/college/campus conferences highly when they are clearly blockchain-focused.
 2. priority_score (integer 1-10): Start at 3, then:
    +2 if in-person
@@ -132,6 +134,19 @@ def _save_cache(db, event_url: str, classification: dict) -> None:
         db.add(AICache(event_url=event_url, classification_json=payload))
 
 
+def _generate_content_sync(
+    client: genai.Client, prompt: str
+):
+    return client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            response_mime_type="application/json",
+        ),
+    )
+
+
 async def _call_gemini(
     client: genai.Client, events: list[RawEvent]
 ) -> tuple[list[dict], bool]:
@@ -156,14 +171,7 @@ async def _call_gemini(
 
     prompt = f"Classify these {len(events)} events:\n{json.dumps(payload, indent=2)}"
     try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                response_mime_type="application/json",
-            ),
-        )
+        response = await asyncio.to_thread(_generate_content_sync, client, prompt)
         clear_gemini_rate_limit_hit()
         result = json.loads(response.text)
         if isinstance(result, list):
@@ -182,6 +190,79 @@ async def _call_gemini(
         return [], False
 
 
+def _normalize_classifications_by_url(classifications: list[dict]) -> dict[str, dict]:
+    by_url: dict[str, dict] = {}
+    for item in classifications:
+        if not isinstance(item, dict):
+            continue
+        raw_url = item.get("url")
+        if not isinstance(raw_url, str):
+            continue
+        canonical_url = canonicalize_event_url(raw_url)
+        if not canonical_url:
+            continue
+        by_url[canonical_url] = item
+    return by_url
+
+
+def _classification_url_variants(url: str) -> list[str]:
+    canonical = canonicalize_event_url(url)
+    if not canonical:
+        return []
+
+    variants = {canonical}
+    if canonical.startswith("https://"):
+        variants.add("http://" + canonical[len("https://") :])
+    elif canonical.startswith("http://"):
+        variants.add("https://" + canonical[len("http://") :])
+    return [u for u in variants if u]
+
+
+def _assign_classifications_to_batch(
+    batch: list[RawEvent], classifications: list[dict]
+) -> tuple[dict[str, dict], int, int, int]:
+    """
+    Returns:
+      - event.url -> chosen classification
+      - url_keyed_matches count
+      - fallback_assigned count
+      - unassigned count
+    """
+    assigned: dict[str, dict] = {}
+    url_keyed_matches = 0
+    fallback_assigned = 0
+
+    # Primary path: URL keyed assignment with lightweight URL variants.
+    by_url = _normalize_classifications_by_url(classifications)
+    for ev in batch:
+        for key in _classification_url_variants(ev.url):
+            cls = by_url.get(key)
+            if cls:
+                assigned[ev.url] = cls
+                url_keyed_matches += 1
+                break
+
+    if len(assigned) == len(batch):
+        return assigned, url_keyed_matches, fallback_assigned, 0
+
+    # Deterministic fallback: assign remaining rows by stable index order.
+    unmatched_events = [ev for ev in batch if ev.url not in assigned]
+    unmatched_rows: list[tuple[int, dict]] = []
+    for idx, row in enumerate(classifications):
+        if not isinstance(row, dict):
+            continue
+        if any(row is matched for matched in assigned.values()):
+            continue
+        unmatched_rows.append((idx, row))
+
+    for ev, (_, row) in zip(unmatched_events, unmatched_rows):
+        assigned[ev.url] = row
+        fallback_assigned += 1
+
+    unassigned = max(len(batch) - len(assigned), 0)
+    return assigned, url_keyed_matches, fallback_assigned, unassigned
+
+
 async def classify_events(events: list[RawEvent]) -> ClassifyEventsResult:
     """
     Classify all events with caching.
@@ -193,7 +274,11 @@ async def classify_events(events: list[RawEvent]) -> ClassifyEventsResult:
     client = _get_client()
     results: list[tuple[RawEvent, dict]] = []
     to_classify: list[RawEvent] = []
+    cache_updates: list[tuple[str, dict]] = []
     hit_rate_limit = False
+
+    for event in events:
+        event.url = canonicalize_event_url(event.url) or event.url
 
     with get_db_context() as db:
         for event in events:
@@ -207,27 +292,62 @@ async def classify_events(events: list[RawEvent]) -> ClassifyEventsResult:
             f"AI classify: {len(results)} cached, {len(to_classify)} new (batches of {BATCH_SIZE})"
         )
 
-        for i in range(0, len(to_classify), BATCH_SIZE):
-            batch = to_classify[i : i + BATCH_SIZE]
-            classifications, rate_limited = await _call_gemini(client, batch)
-            if rate_limited:
-                hit_rate_limit = True
-                for ev in batch:
-                    results.append((ev, {}))
-                for ev in to_classify[i + BATCH_SIZE :]:
-                    results.append((ev, {}))
-                break
-            if not classifications:
-                for ev in batch:
-                    results.append((ev, {}))
-                continue
-            for idx, cls in enumerate(classifications):
-                if idx < len(batch):
-                    ev = batch[idx]
-                    results.append((ev, cls))
-                    _save_cache(db, ev.url, cls)
-            for idx in range(len(classifications), len(batch)):
-                ev = batch[idx]
+    for i in range(0, len(to_classify), BATCH_SIZE):
+        batch = to_classify[i : i + BATCH_SIZE]
+        classifications, rate_limited = await _call_gemini(client, batch)
+        if rate_limited:
+            hit_rate_limit = True
+            for ev in batch:
                 results.append((ev, {}))
+            for ev in to_classify[i + BATCH_SIZE :]:
+                results.append((ev, {}))
+            break
+        if not classifications:
+            for ev in batch:
+                results.append((ev, {}))
+            continue
+
+        assigned_by_event_url, url_keyed_matches, fallback_assigned, unassigned = (
+            _assign_classifications_to_batch(batch, classifications)
+        )
+
+        if unassigned > 0:
+            logger.warning(
+                "Gemini batch low-confidence assignment: batch_size=%s rows_returned=%s "
+                "url_keyed_matches=%s fallback_assigned=%s unassigned=%s",
+                len(batch),
+                len(classifications),
+                url_keyed_matches,
+                fallback_assigned,
+                unassigned,
+            )
+        else:
+            logger.info(
+                "Gemini batch assignment summary: batch_size=%s rows_returned=%s "
+                "url_keyed_matches=%s fallback_assigned=%s unassigned=%s",
+                len(batch),
+                len(classifications),
+                url_keyed_matches,
+                fallback_assigned,
+                unassigned,
+            )
+
+        matched_count = 0
+        for ev in batch:
+            cls = assigned_by_event_url.get(ev.url, {})
+            if cls:
+                matched_count += 1
+                cache_updates.append((ev.url, cls))
+            results.append((ev, cls))
+
+        if matched_count < len(batch):
+            logger.warning(
+                f"Gemini batch partial URL match: matched {matched_count}/{len(batch)} events"
+            )
+
+    if cache_updates:
+        with get_db_context() as db:
+            for event_url, classification in cache_updates:
+                _save_cache(db, event_url, classification)
 
     return ClassifyEventsResult(pairs=results, hit_rate_limit=hit_rate_limit)

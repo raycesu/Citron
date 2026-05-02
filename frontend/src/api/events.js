@@ -1,4 +1,5 @@
 const BASE = import.meta.env.VITE_API_BASE || "/api"
+const SCRAPE_TOKEN = import.meta.env.VITE_SCRAPE_TOKEN || ""
 
 export class ApiRequestError extends Error {
   constructor(message, { status, path, cause } = {}) {
@@ -60,9 +61,13 @@ export function triggerScrape({ layers = null, forceFullRefresh = false } = {}) 
   const body = {}
   if (layers) body.layers = layers
   if (forceFullRefresh) body.force_full_refresh = true
+  const headers = { "Content-Type": "application/json" }
+  if (SCRAPE_TOKEN) {
+    headers["X-Scrape-Token"] = SCRAPE_TOKEN
+  }
   return apiFetch("/scrape", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   })
 }

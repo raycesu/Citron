@@ -10,7 +10,12 @@ import re
 import httpx
 from dateutil import parser as dateparser
 
-from backend.filtering import RawEvent, is_valid_event_title, is_valid_luma_url
+from backend.filtering import (
+    RawEvent,
+    canonicalize_event_url,
+    is_valid_event_title,
+    is_valid_luma_url,
+)
 from backend.scrapers.base import BaseScraper
 from backend.scrapers.devpost import _infer_country_province
 
@@ -67,8 +72,10 @@ class LumaScraper(BaseScraper):
                 try:
                     batch = await self._scrape_api(client, category)
                     for e in batch:
-                        if e.url not in seen_urls:
-                            seen_urls.add(e.url)
+                        canonical_url = canonicalize_event_url(e.url) or e.url
+                        if canonical_url not in seen_urls:
+                            seen_urls.add(canonical_url)
+                            e.url = canonical_url
                             events.append(e)
                 except Exception as exc:
                     logger.debug(f"Luma API category {category} error: {exc}")
@@ -78,8 +85,10 @@ class LumaScraper(BaseScraper):
                 try:
                     batch = await self._scrape_page(client, page_url)
                     for e in batch:
-                        if e.url not in seen_urls:
-                            seen_urls.add(e.url)
+                        canonical_url = canonicalize_event_url(e.url) or e.url
+                        if canonical_url not in seen_urls:
+                            seen_urls.add(canonical_url)
+                            e.url = canonical_url
                             events.append(e)
                 except Exception as exc:
                     logger.warning(f"Luma page {page_url} error: {exc}")
@@ -214,9 +223,13 @@ class LumaScraper(BaseScraper):
             is_virtual = bool(event_data.get("virtual") or event_data.get("zoom_meeting_url"))
             is_inperson = not is_virtual
 
+            normalized_url = canonicalize_event_url(
+                url if url.startswith("http") else f"https://luma.com/{url}"
+            )
+
             return RawEvent(
                 title=title,
-                url=url if url.startswith("http") else f"https://luma.com/{url}",
+                url=normalized_url or url,
                 description=event_data.get("description") or "",
                 source=self.NAME,
                 location=geo.get("full_address") or city,

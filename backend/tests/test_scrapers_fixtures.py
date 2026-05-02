@@ -70,6 +70,34 @@ def test_devpost_parse_missing_title_returns_none():
     assert result is None
 
 
+def test_devpost_parse_empty_location_is_not_forced_online():
+    scraper = DevpostScraper()
+    item = {
+        "title": "ETH Builders 2026",
+        "url": "https://devpost.com/hackathons/eth-builders-2026",
+        "displayed_location": {"location": ""},
+        "submission_period_dates": "Jun 15 - Jun 17, 2026",
+    }
+    event = scraper._parse(item)
+    assert event is not None
+    assert event.is_online is False
+    assert event.is_inperson is True
+
+
+def test_devpost_parse_virtual_location_marks_online():
+    scraper = DevpostScraper()
+    item = {
+        "title": "ETH Virtual Build Week",
+        "url": "https://devpost.com/hackathons/eth-virtual",
+        "displayed_location": {"location": "Virtual"},
+        "submission_period_dates": "Jun 15 - Jun 17, 2026",
+    }
+    event = scraper._parse(item)
+    assert event is not None
+    assert event.is_online is True
+    assert event.is_inperson is False
+
+
 # ---------------------------------------------------------------------------
 # SearchDiscoveryScraper constants and concurrency behavior
 # ---------------------------------------------------------------------------

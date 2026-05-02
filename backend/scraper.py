@@ -24,7 +24,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
 
 from backend.ai_filter import classify_events, gemini_rate_limit_active_for_quota_day
@@ -161,6 +161,63 @@ _STR_PRIZE_POOL = 200
 _STR_TAG = 100
 
 
+def _resolve_publish_gate(
+    *,
+    failed_scraper_count: int,
+    candidate_count: int,
+    existing_count: int,
+    force_full_refresh: bool,
+) -> tuple[str, Optional[str], bool, Optional[str]]:
+    scrape_healthy = failed_scraper_count == 0
+    drop_ok = (
+        existing_count == 0
+        or candidate_count >= existing_count * ANOMALOUS_DROP_THRESHOLD
+    )
+    above_min = candidate_count >= FULL_REFRESH_MIN_CANDIDATES
+
+    publish_status = "full_refresh"
+    delete_blocked_reason: Optional[str] = None
+    force_accepted = False
+    force_rejected_reason: Optional[str] = None
+
+    if not scrape_healthy:
+        publish_status = "additive_only"
+        delete_blocked_reason = f"{failed_scraper_count} scraper(s) failed"
+        if force_full_refresh:
+            force_rejected_reason = "force_full_refresh ignored: scraper failures present"
+        return publish_status, delete_blocked_reason, force_accepted, force_rejected_reason
+
+    if drop_ok:
+        return publish_status, delete_blocked_reason, force_accepted, force_rejected_reason
+
+    if force_full_refresh and above_min:
+        logger.warning(
+            "force_full_refresh accepted: bypassing anomalous-drop gate "
+            "(candidates=%s, existing=%s)",
+            candidate_count,
+            existing_count,
+        )
+        force_accepted = True
+        return publish_status, delete_blocked_reason, force_accepted, force_rejected_reason
+
+    publish_status = "additive_only"
+    if force_full_refresh and not above_min:
+        delete_blocked_reason = (
+            f"candidate count ({candidate_count}) is below "
+            f"FULL_REFRESH_MIN_CANDIDATES ({FULL_REFRESH_MIN_CANDIDATES})"
+        )
+        force_rejected_reason = (
+            f"force_full_refresh ignored: candidate count ({candidate_count}) "
+            f"< FULL_REFRESH_MIN_CANDIDATES ({FULL_REFRESH_MIN_CANDIDATES})"
+        )
+    else:
+        delete_blocked_reason = (
+            f"candidate count ({candidate_count}) is below "
+            f"{int(ANOMALOUS_DROP_THRESHOLD * 100)}% of existing ({existing_count})"
+        )
+    return publish_status, delete_blocked_reason, force_accepted, force_rejected_reason
+
+
 def _clamp_str(value: Optional[str], max_len: int) -> str:
     if value is None:
         return ""
@@ -175,6 +232,15 @@ def _clamp_optional_str(value: Optional[str], max_len: int) -> Optional[str]:
         return None
     s = _clamp_str(value, max_len)
     return s or None
+
+
+def _has_meaningful_text(value: Optional[str], *, min_chars: int = 24) -> bool:
+    if not value:
+        return False
+    normalized = " ".join(str(value).split())
+    if len(normalized) < min_chars:
+        return False
+    return any(ch.isalnum() for ch in normalized)
 
 
 _UNKNOWN_LOCATION_RE = re.compile(
@@ -476,47 +542,12 @@ async def run_pipeline(
                 or 0
             )
 
-        scrape_healthy = failed_scraper_count == 0
-        drop_ok = (
-            existing_count == 0
-            or len(filtered) >= existing_count * ANOMALOUS_DROP_THRESHOLD
+        publish_status, delete_blocked_reason, force_accepted, force_rejected_reason = _resolve_publish_gate(
+            failed_scraper_count=failed_scraper_count,
+            candidate_count=len(filtered),
+            existing_count=existing_count,
+            force_full_refresh=force_full_refresh,
         )
-        above_min = len(filtered) >= FULL_REFRESH_MIN_CANDIDATES
-
-        force_accepted = False
-        force_rejected_reason: Optional[str] = None
-
-        if not scrape_healthy:
-            publish_status = "additive_only"
-            delete_blocked_reason = f"{failed_scraper_count} scraper(s) failed"
-            if force_full_refresh:
-                force_rejected_reason = "force_full_refresh ignored: scraper failures present"
-        elif not drop_ok:
-            if force_full_refresh and above_min:
-                # Intentional override — bypass threshold but keep scraper and
-                # min-candidate guards.
-                publish_status = "full_refresh"
-                force_accepted = True
-                logger.warning(
-                    f"force_full_refresh accepted: bypassing anomalous-drop gate "
-                    f"(candidates={len(filtered)}, existing={existing_count})"
-                )
-            elif force_full_refresh and not above_min:
-                publish_status = "additive_only"
-                delete_blocked_reason = (
-                    f"candidate count ({len(filtered)}) is below "
-                    f"{int(ANOMALOUS_DROP_THRESHOLD * 100)}% of existing ({existing_count})"
-                )
-                force_rejected_reason = (
-                    f"force_full_refresh ignored: candidate count ({len(filtered)}) "
-                    f"< FULL_REFRESH_MIN_CANDIDATES ({FULL_REFRESH_MIN_CANDIDATES})"
-                )
-            else:
-                publish_status = "additive_only"
-                delete_blocked_reason = (
-                    f"candidate count ({len(filtered)}) is below "
-                    f"{int(ANOMALOUS_DROP_THRESHOLD * 100)}% of existing ({existing_count})"
-                )
 
         can_delete = publish_status == "full_refresh"
 
@@ -574,14 +605,22 @@ async def run_pipeline(
         # This matters on Vercel where each invocation gets its own ephemeral DB.
         _now = datetime.now(timezone.utc).replace(tzinfo=None)
         _week = _now + timedelta(days=7)
+        stats_row = (
+            db.query(
+                func.count(Event.id),
+                func.sum(case((Event.has_travel_grant.is_(True), 1), else_=0)),
+                func.sum(case((Event.is_inperson.is_(True), 1), else_=0)),
+                func.sum(case((Event.country.in_(["Canada", "USA"]), 1), else_=0)),
+                func.sum(case((and_(Event.start_date >= _now, Event.start_date <= _week), 1), else_=0)),
+            )
+            .one()
+        )
         current_stats = {
-            "total_events": db.query(func.count(Event.id)).scalar() or 0,
-            "travel_grants": db.query(func.count(Event.id)).filter(Event.has_travel_grant.is_(True)).scalar() or 0,
-            "in_person_events": db.query(func.count(Event.id)).filter(Event.is_inperson.is_(True)).scalar() or 0,
-            "canada_us_events": db.query(func.count(Event.id)).filter(Event.country.in_(["Canada", "USA"])).scalar() or 0,
-            "events_next_7_days": db.query(func.count(Event.id)).filter(
-                and_(Event.start_date >= _now, Event.start_date <= _week)
-            ).scalar() or 0,
+            "total_events": int(stats_row[0] or 0),
+            "travel_grants": int(stats_row[1] or 0),
+            "in_person_events": int(stats_row[2] or 0),
+            "canada_us_events": int(stats_row[3] or 0),
+            "events_next_7_days": int(stats_row[4] or 0),
         }
 
     _last_scrape_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -637,7 +676,7 @@ def _upsert_event(
             db.query(Event)
             .filter(
                 Event.normalized_title == norm,
-                Event.city == city_lower,
+                func.lower(Event.city) == city_lower,
             )
             .first()
         )
@@ -682,8 +721,12 @@ def _upsert_event(
         if can_override_with_incoming and is_valid_event_title(title_db):
             existing.title = title_db
         existing.normalized_title = norm
-        if can_override_with_incoming or not existing.description:
-            existing.description = normalized_raw.description or existing.description
+        incoming_description = (normalized_raw.description or "").strip()
+        if can_override_with_incoming:
+            if _has_meaningful_text(incoming_description):
+                existing.description = incoming_description
+        elif not existing.description and incoming_description:
+            existing.description = incoming_description
         if can_override_with_incoming or not existing.location:
             existing.location = location_db or existing.location
         if can_override_with_incoming or not existing.city:

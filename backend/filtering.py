@@ -14,6 +14,7 @@ Two admission paths exist:
      club events through even when the scraped description is sparse.
 """
 import re
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -242,11 +243,6 @@ _CHAIN_ADJACENT_RES: tuple[re.Pattern, ...] = tuple(
         r"\bweb3\b",
     )
 )
-_GENERIC_EVENT_CTA_RE: re.Pattern = re.compile(
-    r"\b(register|registration|rsvp|tickets?|sign[\s\-]?up|apply|application)\b",
-    re.IGNORECASE,
-)
-
 TRUSTED_SOURCES: set[str] = {
     # Hackathon / blockchain-native platforms (domain allowlist for helpers/tests).
     # All listings still pass the same keyword gate as other sources.
@@ -474,16 +470,6 @@ def is_valid_event_title(title: str) -> bool:
     return not any(p.match(stripped) for p in _NON_EVENT_TITLE_PATTERNS)
 
 
-def _has_general_event_context(event: RawEvent, combined: str) -> bool:
-    if not _EVENT_TYPE_ANCHOR_RE.search(combined):
-        return False
-    if event.start_date or event.end_date or event.deadline:
-        return True
-    if (event.location or "").strip():
-        return True
-    return bool(_GENERIC_EVENT_CTA_RE.search(combined))
-
-
 def is_relevant_event(event: RawEvent) -> bool:
     """
     Return True if the event should proceed past deterministic gating.
@@ -523,6 +509,10 @@ def filter_events(events: list[RawEvent]) -> list[RawEvent]:
 
 
 _YEAR_IN_TITLE = re.compile(r"\b(20\d{2})\b")
+ENABLE_STRICT_STALE_UNKNOWN_DATE_DROP = (
+    os.getenv("ENABLE_STRICT_STALE_UNKNOWN_DATE_DROP", "").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 
 # Sources that hit generic web search: stale URLs are common, so we apply
 # extra rules beyond "unknown date = keep".
@@ -546,6 +536,8 @@ def filter_future_events(events: list[RawEvent]) -> list[RawEvent]:
             if event.start_date is None and event.end_date is None:
                 years = [int(y) for y in _YEAR_IN_TITLE.findall(event.title)]
                 if years and max(years) < current_year:
+                    continue
+                if ENABLE_STRICT_STALE_UNKNOWN_DATE_DROP and not years:
                     continue
 
         if event.start_date is None:

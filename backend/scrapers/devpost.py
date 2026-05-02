@@ -68,8 +68,8 @@ class DevpostScraper(BaseScraper):
             prize = _strip_html(str(item.get("prize_amount", "") or ""))
             description = item.get("tagline", "") or ""
 
-            # Detect online/in-person
-            is_online = "online" in location.lower() or location.strip() == ""
+            # Detect online/in-person. Empty location is often TBD, not online.
+            is_online = _is_online_location(location)
             is_inperson = not is_online
 
             return RawEvent(
@@ -114,6 +114,13 @@ def _extract_city(location: str) -> str:
         return ""
     parts = [p.strip() for p in location.split(",")]
     return parts[0] if parts else ""
+
+
+def _is_online_location(location: str) -> bool:
+    lowered = (location or "").strip().lower()
+    if not lowered:
+        return False
+    return any(token in lowered for token in ("online", "virtual", "remote"))
 
 
 def _infer_country_province(location: str) -> tuple[str, str]:

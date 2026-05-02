@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import and_, func
+from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
 
 load_dotenv()
@@ -32,6 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 FRONTEND_BUILD = Path(__file__).parent.parent / "frontend" / "dist"
+SCRAPE_API_TOKEN = os.getenv("SCRAPE_API_TOKEN", "").strip()
 
 
 @asynccontextmanager
@@ -151,13 +152,16 @@ def list_events(
         q = q.filter(Event.province_state == province_state)
 
     sort_map = {
-        "priority": Event.priority_score.desc(),
-        "soonest": Event.start_date.asc(),
-        "latest_added": Event.scraped_at.desc(),
-        "relevance": Event.relevance_score.desc(),
+        "priority": (Event.priority_score.desc(),),
+        "soonest": (
+            case((Event.start_date.is_(None), 1), else_=0).asc(),
+            Event.start_date.asc(),
+        ),
+        "latest_added": (Event.scraped_at.desc(),),
+        "relevance": (Event.relevance_score.desc(),),
     }
-    order = sort_map.get(sort, Event.priority_score.desc())
-    q = q.order_by(order)
+    order = sort_map.get(sort, (Event.priority_score.desc(),))
+    q = q.order_by(*order)
 
     return q.offset(offset).limit(limit).all()
 
@@ -172,38 +176,46 @@ def get_event(event_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/stats", response_model=StatsOut)
 def get_stats(db: Session = Depends(get_db)):
-    total = db.query(func.count(Event.id)).scalar() or 0
-    grants = db.query(func.count(Event.id)).filter(Event.has_travel_grant.is_(True)).scalar() or 0
-    in_person = db.query(func.count(Event.id)).filter(Event.is_inperson.is_(True)).scalar() or 0
-    canada_us = (
-        db.query(func.count(Event.id))
-        .filter(Event.country.in_(["Canada", "USA"]))
-        .scalar()
-        or 0
-    )
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     week_ahead = now + timedelta(days=7)
-    next_7 = (
-        db.query(func.count(Event.id))
-        .filter(and_(Event.start_date >= now, Event.start_date <= week_ahead))
-        .scalar()
-        or 0
+    stats_row = (
+        db.query(
+            func.count(Event.id),
+            func.sum(case((Event.has_travel_grant.is_(True), 1), else_=0)),
+            func.sum(case((Event.is_inperson.is_(True), 1), else_=0)),
+            func.sum(case((Event.country.in_(["Canada", "USA"]), 1), else_=0)),
+            func.sum(case((and_(Event.start_date >= now, Event.start_date <= week_ahead), 1), else_=0)),
+        )
+        .one()
     )
     last_scrape = get_last_scrape_at()
 
     return StatsOut(
-        total_events=total,
-        travel_grants=grants,
-        in_person_events=in_person,
-        canada_us_events=canada_us,
-        events_next_7_days=next_7,
+        total_events=int(stats_row[0] or 0),
+        travel_grants=int(stats_row[1] or 0),
+        in_person_events=int(stats_row[2] or 0),
+        canada_us_events=int(stats_row[3] or 0),
+        events_next_7_days=int(stats_row[4] or 0),
         last_scraped_at=last_scrape.isoformat() if last_scrape else None,
         gemini_rate_limited_today=gemini_rate_limit_active_for_quota_day(),
     )
 
 
+def _assert_scrape_authorized(
+    x_scrape_token: Optional[str] = Header(default=None, alias="X-Scrape-Token"),
+) -> None:
+    if not SCRAPE_API_TOKEN:
+        return
+    if x_scrape_token == SCRAPE_API_TOKEN:
+        return
+    raise HTTPException(status_code=403, detail="Invalid scrape token")
+
+
 @app.post("/api/scrape", response_model=ScrapeResult)
-async def trigger_scrape(body: ScrapeRequest = ScrapeRequest()):
+async def trigger_scrape(
+    body: ScrapeRequest = ScrapeRequest(),
+    _auth: None = Depends(_assert_scrape_authorized),
+):
     """
     Manually trigger a scrape cycle.
 

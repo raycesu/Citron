@@ -60,7 +60,7 @@ These are the highest-signal, most reliable sources. All results pass the keywor
 
 | Scraper | API / Method | What it fetches |
 |---------|-------------|-----------------|
-| **SearchDiscovery** | **Brave Search API** (`https://api.search.brave.com/res/v1/web/search`) if `BRAVE_SEARCH_API_KEY` is set, otherwise **DuckDuckGo HTML** fallback | Runs up to **17** structured queries (`SEARCH_QUERIES[:MAX_QUERIES]` in `search_discovery.py`, e.g. `"site:luma.com blockchain OR web3 hackathon North America 2026"`) capped at 10 results per query; deduplicates discovered URLs and fetches the top **30** (`MAX_EXTRACT_URLS`) concurrently — up to **8** in flight at a time (`EXTRACT_CONCURRENCY`) — extracting title/description/location from OG tags and H1 elements. This scraper uses a **0.3 s** per-request delay (vs. the 2 s global default) since concurrency replaces serial pacing as the politeness mechanism. **Without a Brave key**, DuckDuckGo often serves a bot challenge and returns no URLs — set `BRAVE_SEARCH_API_KEY` for reliable Layer 3. |
+| **SearchDiscovery** | **Brave Search API** (`https://api.search.brave.com/res/v1/web/search`) if `BRAVE_SEARCH_API_KEY` is set, otherwise **DuckDuckGo HTML** fallback | Runs up to **17** structured queries (`SEARCH_QUERIES[:MAX_QUERIES]` in `search_discovery.py`, e.g. `"site:luma.com blockchain OR web3 hackathon North America 2026"`) capped at 10 results per query; deduplicates discovered URLs and fetches the top **50** (`MAX_EXTRACT_URLS`) concurrently — up to **8** in flight at a time (`EXTRACT_CONCURRENCY`) — extracting title/description/location from OG tags and H1 elements. This scraper uses a **0.3 s** per-request delay (vs. the 2 s global default) since concurrency replaces serial pacing as the politeness mechanism. **Without a Brave key**, DuckDuckGo often serves a bot challenge and returns no URLs — set `BRAVE_SEARCH_API_KEY` for reliable Layer 3. |
 
 ---
 
@@ -286,6 +286,7 @@ The build command and output directory are declared in `vercel.json`; Vercel rew
 | `BRAVE_SEARCH_API_KEY` | Recommended | Layer 3 scraping; DuckDuckGo fallback is bot-blocked |
 | `DATABASE_URL` | Strongly recommended | Postgres URL (e.g. Neon, Supabase). Without this, Vercel falls back to ephemeral SQLite at `/tmp` — **data is lost on every cold start** |
 | `GEMINI_MODEL` | No | Defaults to `gemini-2.5-flash-lite` |
+| `SCRAPE_API_TOKEN` | Recommended | If set, `POST /api/scrape` requires `X-Scrape-Token` header |
 
 ### Test locally before deploying
 
@@ -364,6 +365,9 @@ You can trigger a manual scrape at any time with the **Scan Now** button or via 
 | `ANOMALOUS_DROP_THRESHOLD` | `0.50` | Safety gate: fraction of existing DB rows the new candidate set must reach before destructive deletes are allowed. Lower only for deliberate migration passes; restore to `0.50` afterwards. |
 | `STALE_MISS_THRESHOLD` | `1` | Consecutive healthy full-scan misses before a missing event is deleted. |
 | `FULL_REFRESH_MIN_CANDIDATES` | `1` | Absolute floor for `force_full_refresh`: deletes are blocked if the candidate count is below this number regardless of other flags (prevents wiping on an empty scrape). |
+| `SCRAPE_API_TOKEN` | _(empty)_ | Optional protection for `POST /api/scrape`. When set, callers must send matching `X-Scrape-Token` header. |
+| `ENABLE_STRICT_STALE_UNKNOWN_DATE_DROP` | `false` | Optional strict mode for stale-prone sources: drops unknown-date search results that have no explicit year in title. Keep disabled to preserve current inclusion behavior. |
+| `VITE_SCRAPE_TOKEN` | _(frontend env)_ | Optional frontend token forwarded as `X-Scrape-Token` when calling `POST /api/scrape`. |
 
 ---
 

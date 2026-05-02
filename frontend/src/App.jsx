@@ -199,6 +199,7 @@ export default function App() {
   const [events, setEvents] = useState([])
   const [stats, setStats] = useState(null)
   const [eventsLoading, setEventsLoading] = useState(true)
+  const [softRefreshing, setSoftRefreshing] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [statsLoading, setStatsLoading] = useState(true)
   const [statsError, setStatsError] = useState(null)
@@ -246,6 +247,7 @@ export default function App() {
         setLoadingMore(true)
       } else {
         setEventsLoading(true)
+        setSoftRefreshing(softRefresh)
       }
 
       setError(null)
@@ -264,7 +266,12 @@ export default function App() {
           console.error(err)
         }
       } finally {
-        append ? setLoadingMore(false) : setEventsLoading(false)
+        if (append) {
+          setLoadingMore(false)
+        } else {
+          setEventsLoading(false)
+          setSoftRefreshing(false)
+        }
       }
     },
     []
@@ -311,11 +318,12 @@ export default function App() {
     filters.tag !== null ||
     filters.inperson ||
     filters.travel_grant ||
-    filters.country !== null
+    filters.country !== null ||
+    filters.province_state !== null
 
   // When we have events and a soft-refresh is in progress, show a subtle
   // overlay instead of dropping to the skeleton.
-  const isSoftRefreshing = eventsLoading && hasEventsRef.current
+  const isSoftRefreshing = eventsLoading && softRefreshing && hasEventsRef.current
 
   return (
     <div style={{ minHeight: "100vh" }}>

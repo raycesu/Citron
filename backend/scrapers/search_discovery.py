@@ -590,6 +590,10 @@ class SearchDiscoveryScraper(BaseScraper):
 
     async def scrape(self) -> list[RawEvent]:
         discovered_urls: set[str] = set()
+        total_query_urls = 0
+        empty_query_count = 0
+        ethglobal_filtered = 0
+        non_event_filtered = 0
         if not BRAVE_API_KEY:
             logger.warning(
                 "Search discovery: BRAVE_SEARCH_API_KEY is unset — DuckDuckGo often "
@@ -598,25 +602,42 @@ class SearchDiscoveryScraper(BaseScraper):
         async with httpx.AsyncClient(follow_redirects=True) as client:
             for query in SEARCH_QUERIES[:MAX_QUERIES]:
                 urls = await self._search(client, query)
+                total_query_urls += len(urls)
+                if not urls:
+                    empty_query_count += 1
                 for discovered in urls:
                     canonical = _canonicalize_url(discovered)
                     if _is_ethglobal_url(canonical):
+                        ethglobal_filtered += 1
                         continue
                     if _is_non_event_url(canonical):
+                        non_event_filtered += 1
                         continue
                     discovered_urls.add(canonical)
         if not discovered_urls:
             logger.warning("Search discovery: no URLs from any query (try Brave API key or check DDG HTML selectors).")
+        logger.info(
+            "Search discovery query summary: queries=%s raw_urls=%s unique_urls=%s empty_queries=%s filtered_ethglobal=%s filtered_non_event=%s",
+            min(len(SEARCH_QUERIES), MAX_QUERIES),
+            total_query_urls,
+            len(discovered_urls),
+            empty_query_count,
+            ethglobal_filtered,
+            non_event_filtered,
+        )
 
         urls_to_fetch = list(discovered_urls)[:MAX_EXTRACT_URLS]
         sem = asyncio.Semaphore(EXTRACT_CONCURRENCY)
+        extracted_errors = 0
 
         async def _bounded_extract(client: httpx.AsyncClient, url: str) -> RawEvent | None:
+            nonlocal extracted_errors
             async with sem:
                 try:
                     return await self._extract_event(client, url)
                 except Exception as exc:
                     logger.debug(f"SearchDiscovery extract error for {url}: {exc}")
+                    extracted_errors += 1
                     return None
 
         async with httpx.AsyncClient(follow_redirects=True) as client:
@@ -624,7 +645,15 @@ class SearchDiscoveryScraper(BaseScraper):
                 *[_bounded_extract(client, url) for url in urls_to_fetch]
             )
 
-        return [ev for ev in results if ev is not None]
+        events = [ev for ev in results if ev is not None]
+        logger.info(
+            "Search discovery extract summary: attempted=%s extracted=%s dropped_or_failed=%s extraction_errors=%s",
+            len(urls_to_fetch),
+            len(events),
+            max(len(urls_to_fetch) - len(events), 0),
+            extracted_errors,
+        )
+        return events
 
     async def _search(self, client: httpx.AsyncClient, query: str) -> list[str]:
         if BRAVE_API_KEY:
@@ -642,7 +671,7 @@ class SearchDiscoveryScraper(BaseScraper):
             data = resp.json()
             return [r["url"] for r in data.get("web", {}).get("results", [])]
         except Exception as exc:
-            logger.debug(f"Brave search error: {exc}")
+            logger.warning(f"Brave search error: {exc}")
             return []
 
     async def _ddg_search(self, client: httpx.AsyncClient, query: str) -> list[str]:
@@ -662,7 +691,7 @@ class SearchDiscoveryScraper(BaseScraper):
                     urls.append(href)
             return urls[:10]
         except Exception as exc:
-            logger.debug(f"DuckDuckGo search error: {exc}")
+            logger.warning(f"DuckDuckGo search error: {exc}")
             return []
 
     async def _extract_event(self, client: httpx.AsyncClient, url: str) -> RawEvent | None:

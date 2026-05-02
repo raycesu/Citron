@@ -6,6 +6,7 @@ single connection via StaticPool, mirroring the pattern used in test_api.py.
 Network calls (scrapers, Gemini) are always mocked.
 """
 import asyncio
+import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
@@ -16,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from backend.ai_filter import ClassifyEventsResult
-from backend.filtering import RawEvent
+from backend.filtering import RawEvent, canonicalize_event_url
 from backend.models import AICache, Base, Event, EventTag, Tag
 
 # ---------------------------------------------------------------------------
@@ -238,6 +239,45 @@ def test_upsert_does_not_downgrade_specific_location_or_existing_dates(db):
     assert row.location == "Toronto, Ontario"
     assert row.start_date == existing_start
     assert row.end_date == existing_end
+
+
+def test_upsert_does_not_replace_existing_description_with_sparse_text(db):
+    from backend.scraper import _upsert_event
+
+    event = Event(
+        title="ETH Summit",
+        normalized_title="eth summit",
+        description="Long existing event description with venue details and schedule.",
+        url="https://example.com/summit",
+        source="devpost",
+        country="Canada",
+        is_inperson=True,
+        is_online=False,
+        has_travel_grant=False,
+        priority_score=5.0,
+        relevance_score=5.0,
+        scraped_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        ai_classified=True,
+        consecutive_misses=0,
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+
+    incoming = RawEvent(
+        title="ETH Summit",
+        url="https://example.com/summit",
+        source="devpost",
+        description="TBD",
+    )
+
+    scan_ts = datetime.now(timezone.utc).replace(tzinfo=None)
+    status, event_id = _upsert_event(db, incoming, {}, scan_ts)
+
+    assert status == "updated"
+    assert event_id == event.id
+    db.refresh(event)
+    assert event.description == "Long existing event description with venue details and schedule."
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +550,121 @@ def test_ai_cache_reused_on_second_scan(db):
     assert result["inserted"] == 1
 
 
+def test_classify_events_matches_results_by_url_not_position():
+    from backend.ai_filter import classify_events
+
+    e1 = RawEvent(title="ETH Alpha", url="https://example.com/a")
+    e2 = RawEvent(title="ETH Beta", url="https://example.com/b")
+
+    async def fake_call(_client, _batch):
+        # Intentionally reversed output order to verify URL-keyed matching.
+        return (
+            [
+                {"url": "https://example.com/b", "relevance_score": 2, "priority_score": 2},
+                {"url": "https://example.com/a", "relevance_score": 9, "priority_score": 9},
+            ],
+            False,
+        )
+
+    with (
+        patch("backend.ai_filter.get_db_context", _test_db_context),
+        patch("backend.ai_filter._get_client", return_value=object()),
+        patch("backend.ai_filter._call_gemini", new=AsyncMock(side_effect=fake_call)),
+    ):
+        result = _run(classify_events([e1, e2]))
+
+    mapped = {event.url: cls for event, cls in result.pairs}
+    assert mapped["https://example.com/a"]["relevance_score"] == 9
+    assert mapped["https://example.com/b"]["relevance_score"] == 2
+
+
+def test_classify_events_uses_canonical_cache_key():
+    from backend.ai_filter import classify_events
+
+    canonical_url = canonicalize_event_url("https://example.com/e")
+    with _test_db_context() as session:
+        session.add(
+            AICache(
+                event_url=canonical_url,
+                classification_json=json.dumps({"url": canonical_url, "relevance_score": 7}),
+            )
+        )
+
+    event = RawEvent(
+        title="ETH Canonical",
+        url="https://www.example.com/e/?utm_source=abc#top",
+    )
+    with (
+        patch("backend.ai_filter.get_db_context", _test_db_context),
+        patch("backend.ai_filter._get_client", return_value=object()),
+        patch("backend.ai_filter._call_gemini", new=AsyncMock(return_value=([], False))) as mock_gemini,
+    ):
+        result = _run(classify_events([event]))
+
+    mock_gemini.assert_not_called()
+    assert result.pairs[0][1]["relevance_score"] == 7
+
+
+def test_classify_events_falls_back_when_rows_missing_url():
+    from backend.ai_filter import classify_events
+
+    e1 = RawEvent(title="ETH One", url="https://example.com/one")
+    e2 = RawEvent(title="ETH Two", url="https://example.com/two")
+
+    async def fake_call(_client, _batch):
+        # No URL keys, but row count aligns with batch size.
+        return (
+            [
+                {"relevance_score": 4, "priority_score": 5, "tags": ["conference"]},
+                {"relevance_score": 8, "priority_score": 9, "tags": ["hackathon"]},
+            ],
+            False,
+        )
+
+    with (
+        patch("backend.ai_filter.get_db_context", _test_db_context),
+        patch("backend.ai_filter._get_client", return_value=object()),
+        patch("backend.ai_filter._call_gemini", new=AsyncMock(side_effect=fake_call)),
+    ):
+        result = _run(classify_events([e1, e2]))
+
+    mapped = {event.url: cls for event, cls in result.pairs}
+    assert mapped["https://example.com/one"]["relevance_score"] == 4
+    assert mapped["https://example.com/two"]["relevance_score"] == 8
+
+
+def test_classify_events_partial_url_match_fills_unmatched_by_order():
+    from backend.ai_filter import classify_events
+
+    e1 = RawEvent(title="ETH One", url="https://example.com/one")
+    e2 = RawEvent(title="ETH Two", url="https://example.com/two")
+    e3 = RawEvent(title="ETH Three", url="https://example.com/three")
+
+    async def fake_call(_client, _batch):
+        return (
+            [
+                {"url": "https://example.com/two", "relevance_score": 6, "priority_score": 6},
+                {"relevance_score": 3, "priority_score": 4},
+                {"relevance_score": 9, "priority_score": 9},
+            ],
+            False,
+        )
+
+    with (
+        patch("backend.ai_filter.get_db_context", _test_db_context),
+        patch("backend.ai_filter._get_client", return_value=object()),
+        patch("backend.ai_filter._call_gemini", new=AsyncMock(side_effect=fake_call)),
+    ):
+        result = _run(classify_events([e1, e2, e3]))
+
+    mapped = {event.url: cls for event, cls in result.pairs}
+    # URL-keyed match still wins for the directly keyed event.
+    assert mapped["https://example.com/two"]["relevance_score"] == 6
+    # Other events are deterministically filled instead of being dropped.
+    assert mapped["https://example.com/one"] != {}
+    assert mapped["https://example.com/three"] != {}
+
+
 # ---------------------------------------------------------------------------
 # 9. Stale events from non-scraped sources are never touched
 # ---------------------------------------------------------------------------
@@ -626,6 +781,7 @@ def test_force_full_refresh_blocked_below_min_candidates(db):
     assert result["publish_status"] == "additive_only"
     assert result["force_full_refresh_accepted"] is False
     assert result["force_full_refresh_rejected_reason"] is not None
+    assert "FULL_REFRESH_MIN_CANDIDATES" in (result["delete_blocked_reason"] or "")
     assert result["stale_deleted"] == 0
 
     db.expire_all()

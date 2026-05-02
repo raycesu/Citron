@@ -157,6 +157,25 @@ def test_filter_country(client, db):
     assert all(e["country"] == "Canada" for e in resp.json())
 
 
+def test_sort_soonest_puts_null_dates_last(client, db):
+    _add_event(
+        db,
+        url="https://dated.com",
+        start_date=datetime(2030, 1, 1),
+        title="Dated Event",
+    )
+    _add_event(
+        db,
+        url="https://undated.com",
+        start_date=None,
+        title="Undated Event",
+    )
+    resp = client.get("/api/events?sort=soonest&limit=10")
+    assert resp.status_code == 200
+    titles = [event["title"] for event in resp.json()]
+    assert titles.index("Dated Event") < titles.index("Undated Event")
+
+
 def test_filter_by_tag(client, db):
     event = _add_event(db, url="https://g.com")
     tag = Tag(name="Solana")
@@ -291,3 +310,19 @@ def test_scrape_additive_only_exposes_reason(client):
     detail = resp.json()["detail"]
     assert detail["publish_status"] == "additive_only"
     assert detail["delete_blocked_reason"] is not None
+
+
+def test_scrape_requires_token_when_configured(client):
+    with patch("backend.main.SCRAPE_API_TOKEN", "secret-token"):
+        resp = client.post("/api/scrape", json={})
+    assert resp.status_code == 403
+
+
+def test_scrape_accepts_valid_token_when_configured(client):
+    with (
+        patch("backend.main.SCRAPE_API_TOKEN", "secret-token"),
+        patch(_PIPELINE_MOCK, new=AsyncMock(return_value=_FULL_REFRESH_RESULT)) as mock,
+    ):
+        resp = client.post("/api/scrape", json={}, headers={"X-Scrape-Token": "secret-token"})
+    assert resp.status_code == 200
+    mock.assert_awaited_once()
