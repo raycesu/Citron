@@ -4,7 +4,8 @@
   "functions": {
     "api/index.py": {
       "includeFiles": "backend/**",
-      "excludeFiles": "backend/tests/**"
+      "excludeFiles": "backend/tests/**",
+      "maxDuration": 300
     }
   },
   "rewrites": [

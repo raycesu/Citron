@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -241,6 +241,37 @@ async def trigger_scrape(
     except Exception as exc:
         logger.error(f"Manual scrape failed: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _run_scheduled_pipeline() -> None:
+    import asyncio
+
+    try:
+        summary = asyncio.run(run_pipeline())
+        logger.info(f"Scheduled scrape complete: {summary}")
+    except Exception as exc:
+        logger.error(f"Scheduled scrape failed: {exc}", exc_info=True)
+
+
+@app.post("/api/scrape/scheduled", status_code=202)
+async def trigger_scheduled_scrape(
+    background_tasks: BackgroundTasks,
+    x_scrape_token: Optional[str] = Header(default=None, alias="X-Scrape-Token"),
+):
+    """
+    Fire-and-forget scan trigger for external schedulers (e.g. cron-job.org).
+
+    Unlike POST /api/scrape, this endpoint:
+      - always requires SCRAPE_API_TOKEN (fails closed even if the token env
+        var is unset, since it is reachable by any external caller on a timer)
+      - returns immediately (202) while the full pipeline runs in the
+        background, so it never times out on the caller's side
+    """
+    if not SCRAPE_API_TOKEN or x_scrape_token != SCRAPE_API_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid or missing scrape token")
+
+    background_tasks.add_task(_run_scheduled_pipeline)
+    return {"status": "scheduled"}
 
 
 @app.get("/api/tags")
